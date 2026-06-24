@@ -6,6 +6,7 @@ const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' })
 export async function GET() {
   try {
     // 对话表
+    //这里的意思是让数据库来执行下面这段sql语句
     await sql`
       CREATE TABLE IF NOT EXISTS chats (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
