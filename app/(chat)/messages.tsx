@@ -3,6 +3,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { UIMessage } from 'ai'
+import Markdown from './markdown'
 
 interface Props {
   messages: UIMessage[]
@@ -48,7 +49,10 @@ export default function Messages({ messages, status }: Props) {
             // 对比新旧 DOM，发现"哦，最后一个 div 的文本变了"
             // 只更新那一个 DOM 节点
               if (part.type === 'text') {
-                return <div key={idx} className="whitespace-pre-wrap">{part.text}</div>
+                if (message.role === 'user') {
+                    return <div key={idx} className="whitespace-pre-wrap">{part.text}</div>
+                    }
+                return <Markdown key={idx}>{part.text}</Markdown>
               }
               return null
             })}
