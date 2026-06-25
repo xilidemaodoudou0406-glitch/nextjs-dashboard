@@ -3,15 +3,25 @@
 
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import Messages from './messages'
 import ChatInput from './chat-input'
 
 export default function Chat() {
   const [input, setInput] = useState('')
   
+  // 为这次会话生成一个固定的 chatId
+    // useMemo 配合空依赖数组 []，
+    // 让 chatId 只在组件首次挂载时生成一次，之后不变。
+    // 这样整个会话期间共享同一个 chatId
+  const chatId = useMemo(() => crypto.randomUUID(), [])
+  
   const { messages, sendMessage, status, stop, error } = useChat({
-    transport: new DefaultChatTransport({ api: '/api/chat' }),
+    id: chatId,
+    transport: new DefaultChatTransport({ 
+      api: '/api/chat',
+      body: { id: chatId },  // 每次请求自动带上 chatId
+    }),
   })
   
   const handleSubmit = (e: React.FormEvent) => {
