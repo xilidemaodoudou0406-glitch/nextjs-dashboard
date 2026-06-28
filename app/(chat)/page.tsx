@@ -56,14 +56,8 @@ export default async function ChatHomePage() {
   const session = await auth()
   if (!session?.user?.id) redirect('/login')
   
-  return (
-    <main className="flex flex-col h-screen">
-      <header className="border-b px-4 py-3 flex justify-between items-center">
-        <h1 className="font-semibold">AI Chat</h1>
-        <span className="text-sm text-gray-500">{session.user.email}</span>
-      </header>
-      
-      <Chat />
-    </main>
-  )
+  // 为新对话生成 ID
+  const newChatId = crypto.randomUUID()
+  
+  return <Chat chatId={newChatId} />
 }

@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   
   // 3. 取最后一条用户消息
   const lastMessage = messages[messages.length - 1]
-  if (lastMessage.role !== 'user') {
+  if ( !lastMessage || lastMessage.role !== 'user') {
     return new Response('Last message must be from user', { status: 400 })
   }
   
@@ -58,8 +58,11 @@ export async function POST(req: Request) {
     model: chatModel,
     system: '你是一个有帮助的 AI 助手。用中文回复。回复要简洁。',
     messages: await convertToModelMessages(messages),
+    maxOutputTokens: 1000, // 限制单次回复最大 token 数
     // AI 回复完成后存数据库
-    onFinish: async ({ text }) => {
+    onFinish: async ({ text,usage }) => {
+      console.log('[AI] tokens used:', usage) // usage包含输入和输出token数
+      // 存ai消息
       await sql`
         INSERT INTO messages (chat_id, role, content) 
         VALUES (${chatId}, 'assistant', ${text})

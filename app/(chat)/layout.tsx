@@ -2,7 +2,7 @@ import React from "react";
 
 export default function Page ({children}:{children:React.ReactNode}) {
     return (
-        <div>
+        <div className="h-screen flex flex-col">
             {children}
         </div>
     )
