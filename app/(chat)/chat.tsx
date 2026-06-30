@@ -22,6 +22,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   const { messages, sendMessage, status, stop, error } = useChat({
     id: chatId,
     // 这个初始化历史消息每次发消息都会传给后端（前提是触发这个之后）
+
     // 这里目前先了解这么多 还有usechat内部原理没有了解
     // 后面需要了解这个message 是怎么被usechat维护的
     // 此处注意对比有初始化历史消息和没有这两种情况下，发送消息的不同
@@ -30,6 +31,13 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       api: '/api/chat',
       body: { id: chatId },
     }),
+    // ai流式响应全部结束的时候触发onfinish
+    onFinish:() => {
+    // 这里的refresh方法是next特有，该方法单独刷新 Server Components(让侧边栏更新)
+    // 因为侧边栏在 layout 里，发消息时不会重新渲染
+    // server components和client 的更新机制不同（去了解）
+      router.refresh()
+    }
   })
   // 此处我有一个疑问：这边是把历史消息和心得消息打包一起发给后端，
   // 如果设计成只发送新消息到后端（不是这个接口，这个接口是掉模型api的）
@@ -40,6 +48,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
 
   
   // 此处有疑问
+  // 暂时理解为这里是判断在首页的时候用户是否发送了第一条消息，是否要跳转路由
   useEffect(() => {
     if (messages.length === 1 && messages[0].role === 'user') {
       const currentPath = window.location.pathname
