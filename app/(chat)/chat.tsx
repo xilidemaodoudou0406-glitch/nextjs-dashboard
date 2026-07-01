@@ -58,7 +58,8 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         // replaceState 之后，app/(chat)/chat/[id]/page.tsx 永远不会在执行了，
         // 除非刷新页面或者手动输入地址等
         // 除非用户主动刷新页面或重新打开这个 URL
-        // 注意区分 这个是原生方法，只是修改路径而已
+
+        // 注意区分 这个是原生方法，只是修改路径而已(并不会跳转路由)
         // 并不会触发初始化历史消息
         window.history.replaceState(null, '', `/chat/${chatId}`)
       }

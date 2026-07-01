@@ -59,5 +59,5 @@ export default async function ChatHomePage() {
   // 为新对话生成 ID
   const newChatId = crypto.randomUUID()
   
-  return <Chat chatId={newChatId} />
+  return <Chat key={newChatId} chatId={newChatId} />
 }

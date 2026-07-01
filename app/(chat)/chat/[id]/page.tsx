@@ -42,5 +42,5 @@ export default async function ChatPage({
     parts: [{ type: 'text' as const, text: m.content }],
   }))
   
-  return <Chat chatId={chatId} initialMessages={initialMessages} />
+  return <Chat key={chatId} chatId={chatId} initialMessages={initialMessages} />
 }
