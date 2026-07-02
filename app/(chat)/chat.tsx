@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Messages from './messages'
 import ChatInput from './chat-input'
+import { Suggestions } from '@/app/components/suggestions'
 
 interface Props {
   chatId: string
@@ -24,7 +25,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
     // 这个初始化历史消息每次发消息都会传给后端（前提是触发这个之后）
 
     // 这里目前先了解这么多 还有usechat内部原理没有了解
-    // 后面需要了解这个message 是怎么被usechat维护的
+    // 后面需要了解这个messages 是怎么被usechat维护的
     // 此处注意对比有初始化历史消息和没有这两种情况下，发送消息的不同
     messages: initialMessages, // 这个是传回来的历史消息
     transport: new DefaultChatTransport({ 
@@ -76,7 +77,17 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-      <Messages messages={messages} status={status} />
+      <div className="flex-1 overflow-y-auto flex flex-col justify-center p-4">
+        {/* chat组件就是右侧聊天区域，要是有消息就不显示建议，即变成对话框，显示消息 */}
+        {/* 点击建议按钮时，调用 onSend 函数发送消息，onSend 函数会调用 sendMessage 方法发送消息
+        发送消息后，messages 会更新，组件重新渲染，显示消息列表
+        发送消息后，onFinish 回调会触发 router.refresh()，刷新侧边栏 */}
+        {messages.length === 0 ? (
+          <Suggestions onSend={(text) => sendMessage({ text })} />
+        ) : (
+          <Messages messages={messages} status={status}/>
+        )}
+      </div>
       
       {error && (
         <div className="mx-4 mb-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
