@@ -1,6 +1,6 @@
 // app/(chat)/api/chat/route.ts
 import { streamText, generateText, type UIMessage, convertToModelMessages } from 'ai'
-import { chatModel } from '@/app/lib/ai/provider'
+import { models } from '@/app/lib/ai/provider'
 import { auth } from '@/auth'
 import postgres from 'postgres'
 
@@ -11,7 +11,7 @@ async function generateTitle(firstMessage:string):Promise<string> {
   // 根据用户输入的第一句话生成
   try {
     const { text } = await generateText({
-      model: chatModel,
+      model: models['deepseek-chat'],
       system: '你是一个标题生成助手。根据用户的第一条消息生成一个简短的对话标题(不超过 15 字)。直接返回标题文字,不要任何引号、标点或解释。',
       prompt: firstMessage,
       maxOutputTokens: 50,
@@ -33,9 +33,10 @@ export async function POST(req: Request) {
   const userId = session.user.id
   
   // 2. 解析请求
-  const { messages, id: chatId }: { 
+  const { messages, id: chatId, modelId }: { 
     messages: UIMessage[]
     id: string 
+    modelId:'deepseek-chat'|'deepseek-reasoner' // 切换模型
   } = await req.json()
   
   // 3. 取最后一条用户消息
@@ -72,7 +73,7 @@ export async function POST(req: Request) {
   // 6. 调用 AI
   // streamText 是 AI SDK 的核心函数，返回一个流式响应
   const result = streamText({
-    model: chatModel,
+    model: models[modelId],
     // system：系统提示词，控制 AI 的行为风格
     system: '你是一个有帮助的 AI 助手。用中文回复。回复要简洁。',
     // convertToModelMessages 把前端的 UIMessage 格式转成模型能理解的格式

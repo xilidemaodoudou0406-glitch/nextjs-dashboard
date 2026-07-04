@@ -4,13 +4,15 @@
 import { useEffect, useRef } from 'react'
 import type { UIMessage } from 'ai'
 import Markdown from './markdown'
+import { MessageFeedback } from '@/app/components/message-feedback'
 
 interface Props {
+  chatId: string
   messages: UIMessage[]
   status: string
 }
 
-export default function Messages({ messages, status }: Props) {
+export default function Messages({ chatId, messages, status }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   
   // 新消息自动滚动到底部
@@ -56,9 +58,17 @@ export default function Messages({ messages, status }: Props) {
               }
               return null
             })}
+            {message.role === 'assistant' && (
+              <div className="mt-2 pt-1 flex items-center">
+                <MessageFeedback messageId={message.id} chatId={chatId} />
+              </div>
+            )}
+
           </div>
         </div>
       ))}
+
+      
       
       {status === 'submitted' && (
         <div className="flex justify-start">

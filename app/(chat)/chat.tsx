@@ -17,9 +17,11 @@ interface Props {
 // 组件不再自己生成 chatId，
 // 而是从外部接收——这样 /（首页）和 /chat/[id]（历史页）可以共用同一个组件
 export default function Chat({ chatId, initialMessages = [] }: Props) {
+
   const [input, setInput] = useState('')
   const router = useRouter()
-  
+  const [modelId, setModelId] = useState('deepseek-chat')
+
   const { messages, sendMessage, status, stop, error } = useChat({
     id: chatId,
     // 这个初始化历史消息每次发消息都会传给后端（前提是触发这个之后）
@@ -68,10 +70,19 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   }, [messages, chatId])
   
   // 在chat-input中调用这个函数，这个函数更新messages并且调用transport发送请求
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!input.trim()) return
-    sendMessage({ text: input })
+  const handleSubmit = (text: string, fileParts: { url: string; mediaType: string }[]) => {
+    if (!text.trim() && fileParts.length === 0) return
+    sendMessage({
+      role: 'user',
+      parts: [
+        { type: 'text', text },
+        ...fileParts.map(f => ({
+          type: 'file' as const,
+          url: f.url,
+          mediaType: f.mediaType,
+        })),
+      ],
+    })
     setInput('')
   }
   
@@ -85,7 +96,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         {messages.length === 0 ? (
           <Suggestions onSend={(text) => sendMessage({ text })} />
         ) : (
-          <Messages messages={messages} status={status}/>
+          <Messages chatId={chatId} messages={messages} status={status}/>
         )}
       </div>
       
@@ -101,6 +112,8 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         onSubmit={handleSubmit}
         status={status}
         onStop={stop}
+        modelId={modelId}
+        onModelChange={setModelId}
       />
     </div>
   )
