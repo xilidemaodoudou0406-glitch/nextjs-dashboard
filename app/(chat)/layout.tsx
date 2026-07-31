@@ -1,6 +1,5 @@
 // app/(chat)/layout.tsx
-import { auth } from '@/auth'
-import { redirect } from 'next/navigation'
+import { requireUser } from '@/app/lib/auth/require-user'
 import Sidebar from './siderbar'
 
 export default async function ChatLayout({
@@ -8,12 +7,11 @@ export default async function ChatLayout({
 }: {
   children: React.ReactNode
 }) {
-  const session = await auth()
-  if (!session?.user?.id) redirect('/login')
+  const user = await requireUser({ redirectTo: '/login' })
   
   return (
     <div className="flex h-screen">
-      <Sidebar userId={session.user.id} userEmail={session.user.email!} />
+      <Sidebar userId={user.id} userEmail={user.email ?? ''} />
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* layout 的 children 不接收 props */}
         {children}

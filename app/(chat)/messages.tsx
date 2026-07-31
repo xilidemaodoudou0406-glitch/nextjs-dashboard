@@ -2,17 +2,33 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import type { UIMessage } from 'ai'
+import { GitBranch } from 'lucide-react'
 import Markdown from './markdown'
 import { MessageFeedback } from '@/app/components/message-feedback'
+import { isMessageStableForActions } from '@/app/lib/ai/message'
+import type {
+  ChatMessage,
+  ChatRuntimeStatus,
+} from '@/app/lib/ai/message'
 
 interface Props {
   chatId: string
-  messages: UIMessage[]
-  status: string
+  messages: ChatMessage[]
+  status: ChatRuntimeStatus
+  emptyLabel?: string
+  onOpenBranch?: (
+    message: ChatMessage,
+    trigger: HTMLButtonElement,
+  ) => void
 }
 
-export default function Messages({ chatId, messages, status }: Props) {
+export default function Messages({
+  chatId,
+  messages,
+  status,
+  emptyLabel = '开始你的对话吧',
+  onOpenBranch,
+}: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   
   // 新消息自动滚动到底部
@@ -23,7 +39,7 @@ export default function Messages({ chatId, messages, status }: Props) {
   if (messages.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-400">
-        开始你的对话吧
+        {emptyLabel}
       </div>
     )
   }
@@ -58,11 +74,31 @@ export default function Messages({ chatId, messages, status }: Props) {
               }
               return null
             })}
-            {message.role === 'assistant' && (
-              <div className="mt-2 pt-1 flex items-center">
+            {/* 只有ai完成回复的才显示点赞和分支 */}
+            {isMessageStableForActions(message) && (
+              <div className="mt-2 flex items-center gap-1 border-t border-gray-200 pt-2">
                 <MessageFeedback messageId={message.id} chatId={chatId} />
+                {onOpenBranch && (
+                  <button
+                    aria-label="基于这条回答打开分支"
+                    className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 transition hover:bg-white hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    onClick={(event) =>
+                      onOpenBranch(message, event.currentTarget)
+                    }
+                    type="button"
+                  >
+                    <GitBranch aria-hidden="true" size={14} />
+                    分支
+                  </button>
+                )}
               </div>
             )}
+            {message.role === 'assistant' &&
+              message.metadata?.persistenceStatus === 'interrupted' && (
+                <p className="mt-2 text-xs text-gray-500">
+                  已停止生成
+                </p>
+              )}
 
           </div>
         </div>

@@ -1,8 +1,9 @@
 // app/(chat)/chat-list.tsx
 import postgres from 'postgres'
 import ChatListClient from './chat-list-client'
+import { env } from '@/app/lib/env'
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' })
+const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
 export interface ChatItem {
   id: string
@@ -15,6 +16,8 @@ export default async function ChatList({ userId }: { userId: string }) {
     SELECT id, title, created_at 
     FROM chats 
     WHERE user_id = ${userId}
+      -- 分支不作为普通历史会话出现在左侧栏。
+      AND parent_chat_id IS NULL
     ORDER BY created_at DESC
   `
   

@@ -2,28 +2,34 @@
 // 输入框组件
 'use client'
 
-import { useState, useRef } from 'react'
+import Image from 'next/image'
+import { useState, useRef, useEffect } from 'react'
 import { Image as ImageIcon, X } from 'lucide-react'
 import { ModelSelector } from '../components/model-selector'
+import {
+  isChatRequestInProgress,
+  type ChatRuntimeStatus,
+} from '@/app/lib/ai/message'
 
 interface Props {
   value: string
   onChange: (val: string) => void
   onSubmit: (text: string, fileParts: { url: string; mediaType: string }[]) => void
-  status: string
+  status: ChatRuntimeStatus // 就是指ready / submitted / streaming / error
   onStop: () => void
   modelId: string
   onModelChange: (modelId: string) => void
 }
 
 export default function ChatInput({ value, onChange, onSubmit, status, onStop, modelId, onModelChange }: Props) {
-  const isStreaming = status === 'streaming' || status === 'submitted'
+  const isStreaming = isChatRequestInProgress(status)
   
   // 用来存文件的变量
   const [attachments, setAttachments] = useState<File[]>([])
   // 用于存放URL.createObjectURL(file)生成的URL
   const [previews, setPreviews] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const submittingRef = useRef(false)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -45,10 +51,11 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
     
 
   // 发送：用已有 previews（blob URL）+ attachments 拼 fileParts
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const submitMessage = () => {
+    if (submittingRef.current) return // 防止快速连点/连按 Enter 重复发送
     if (!value.trim() && attachments.length === 0) return;
+
+    submittingRef.current = true
 
     // previews 已在 handleFileChange 中生成（blob URL），直接用
     const fileParts = attachments.map((file, i) => ({
@@ -63,6 +70,18 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
     setPreviews([]);
   };
 
+  // value 被 onChange('') 清空后解锁，允许下一次发送
+  useEffect(() => {
+    if (!value) {
+      submittingRef.current = false
+    }
+  }, [value])
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    submitMessage()
+  }
+
 
   return (
     <form onSubmit={handleSubmit} className="border-t p-4">
@@ -71,7 +90,14 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
         <div className="flex gap-2 p-2">
           {previews.map((src, i) => (
             <div key={i} className="relative">
-              <img src={src} className="h-16 w-16 rounded object-cover" alt="preview" />
+              <Image
+                src={src}
+                width={64}
+                height={64}
+                unoptimized
+                className="h-16 w-16 rounded object-cover"
+                alt="preview"
+              />
               <button
                 type="button"
                 onClick={() => removeFile(i)}
@@ -114,7 +140,7 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
             // Enter 发送,Shift+Enter 换行
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              handleSubmit(e as any)
+              submitMessage()
             }
           }}
           placeholder="说点什么..."

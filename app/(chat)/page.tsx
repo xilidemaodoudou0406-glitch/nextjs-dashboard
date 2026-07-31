@@ -48,16 +48,14 @@
 
 
 // app/(chat)/page.tsx
-import { auth } from '@/auth'
-import { redirect } from 'next/navigation'
+import { requireUser } from '@/app/lib/auth/require-user'
 import Chat from './chat'
 
 export default async function ChatHomePage() {
-  const session = await auth()
-  if (!session?.user?.id) redirect('/login')
+  await requireUser({ redirectTo: '/login' })
   
-  // 为新对话生成 ID
-  const newChatId = crypto.randomUUID()
+  // 为新对话生成 ID（crypto是一个全局可用的对象，无需导入）
+  const newChatId = crypto.randomUUID() // 作为chat的id被存到数据库
   
   return <Chat key={newChatId} chatId={newChatId} />
 }

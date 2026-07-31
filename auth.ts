@@ -5,8 +5,9 @@ import { authConfig } from './auth.config'
 import postgres from 'postgres'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
+import { env } from '@/app/lib/env'
 // 连接数据库
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' })
+const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
 // 从数据库查用户
 async function getUser(email: string) {
@@ -30,6 +31,7 @@ async function getUser(email: string) {
 // handlers: 给 [...nextauth]/route.ts 用的 HTTP 处理器(暂时没用到)
 export const { auth, signIn, signOut, handlers } = NextAuth({
   ...authConfig,
+  secret: env.AUTH_SECRET,
   providers: [
     // 登录方式：邮箱密码（Credentials）
     Credentials({

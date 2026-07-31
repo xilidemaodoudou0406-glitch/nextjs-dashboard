@@ -29,7 +29,11 @@ export default function ChatListClient({ grouped }: Props) {
     setPendingId(chatId)
     startTransistion( async () => {
       try{
-        await deleteChat(chatId)
+        const result = await deleteChat(chatId)
+        if (!result.ok) {
+          alert('删除失败：' + result.error.message)
+          return
+        }
         // 如果当前正在查看被删的对话,跳回首页
         if (pathname === `/chat/${chatId}`) {
           router.push('/')

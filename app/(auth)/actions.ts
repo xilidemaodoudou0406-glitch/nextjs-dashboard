@@ -4,11 +4,10 @@ import postgres from 'postgres'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { signIn } from '@/auth'
-import { redirect } from 'next/navigation'
-import exp from 'constants'
 import { AuthError } from 'next-auth'
+import { env } from '@/app/lib/env'
 
-const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' })
+const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
 // 表单校验 schema
 const RegisterSchema = z.object({

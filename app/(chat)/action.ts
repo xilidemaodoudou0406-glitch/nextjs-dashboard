@@ -1,50 +1,94 @@
 'use server'
 
-import { auth } from "@/auth"
 import postgres from "postgres"
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { error } from "console"
+import { env } from '@/app/lib/env'
+import { requireUser } from '@/app/lib/auth/require-user'
+import {
+    actionFailure,
+    actionSuccess,
+    resourceNotFoundError,
+    type ActionResult,
+} from '@/app/lib/errors'
+import {
+    chatIdSchema,
+    messageFeedbackSchema,
+    parseInput,
+} from '@/app/lib/validation/request'
 
-const sql = postgres(process.env.POSTGRES_URL!,{ ssl: 'require' })
+const sql = postgres(env.POSTGRES_URL,{ ssl: 'require' })
 
-export async function deleteChat (chatId:string) {
-    const session = await auth()
-    if (!session?.user?.id) throw new Error('未登录')
-    
-    // 验证身份
-    const chats = await sql`
-        SELECT user_id FROM chats WHERE id = ${chatId}
-    `
-    if (chats.length === 0) throw new Error('未找到对话')
-    if (chats[0].user_id != session?.user?.id) throw new Error('未授权')
+/**
+ * 删除当前用户的一条主对话。
+ *
+ * 阶段二为它增加了 `parent_chat_id IS NULL` 边界，因此这个普通删除入口
+ * 不可能误删分支；分支必须通过专门的 `deleteBranch` Action 删除。
+ * 删除主对话时，数据库外键会级联清理它下面的分支。
+ */
+export async function deleteChat (input: unknown): Promise<ActionResult> {
+    try {
+        const chatId = parseInput(chatIdSchema, input)
+        const user = await requireUser()
 
-    // 删除(messages 表有 ON DELETE CASCADE,会自动连带删除)
-    await sql`DELETE FROM chats WHERE id = ${chatId}`
+        // 归属条件直接写入 DELETE，未命中时不区分“不存在”和“不属于当前用户”
+        const deletedChats = await sql<{ id: string }[]>`
+            DELETE FROM chats
+            WHERE id = ${chatId}
+              AND user_id = ${user.id}
+              -- 主对话删除入口不能被拿来删除分支；分支有独立的删除 Action。
+              AND parent_chat_id IS NULL
+            RETURNING id
+        `
 
-    // 先不用深入了解 这个功能也是为了刷新页面
-    revalidatePath('/')
+        if (deletedChats.length === 0) {
+            throw resourceNotFoundError('对话不存在')
+        }
+
+        revalidatePath('/')
+        return actionSuccess()
+    } catch (error) {
+        return actionFailure(error)
+    }
 }
 
-export async function addLikes (chatId: string,messageId: string,isLike: boolean | null) {
-    const session = await auth()
-    if (!session?.user?.id) throw new Error('未登录')
-    
-    // 验证身份
-    const chats = await sql`
-        SELECT user_id FROM chats WHERE id = ${chatId}
-    `
-    if (chats.length === 0) throw new Error('未找到对话')
-    if (chats[0].user_id != session?.user?.id) throw new Error('未授权')
-    
-    // 更新 likes 字段
-    await sql`
-        UPDATE messages
-        SET likes = GREATEST(0, COALESCE(likes, 0) + CASE 
-            WHEN ${isLike} = true THEN 1 
-            WHEN ${isLike} = false THEN -1 
-            ELSE 0 
-        END)
-        WHERE id = ${messageId};
-    `
+export async function addLikes (
+    chatIdInput: unknown,
+    messageIdInput: unknown,
+    isLikeInput: unknown,
+): Promise<ActionResult> {
+    try {
+        const { chatId, messageId, isLike } = parseInput(messageFeedbackSchema, {
+            chatId: chatIdInput,
+            messageId: messageIdInput,
+            isLike: isLikeInput,
+        })
+        const user = await requireUser()
+
+        // 一条查询同时证明 message 属于 chat，且 chat 属于当前用户
+        const updatedMessages = await sql<{ id: string }[]>`
+            UPDATE messages AS message
+            SET likes = GREATEST(0, COALESCE(message.likes, 0) + CASE
+                WHEN ${isLike} = true THEN 1
+                WHEN ${isLike} = false THEN -1
+                ELSE 0
+            END)
+            FROM chats AS chat
+            WHERE message.id = ${messageId}
+              AND message.chat_id = ${chatId}
+              -- UI 会隐藏不可操作消息，但服务端仍必须独立校验，不能信任前端。
+              AND message.role = 'assistant'
+              AND message.status = 'completed'
+              AND chat.id = message.chat_id
+              AND chat.user_id = ${user.id}
+            RETURNING message.id
+        `
+
+        if (updatedMessages.length === 0) {
+            throw resourceNotFoundError('消息不存在')
+        }
+
+        return actionSuccess()
+    } catch (error) {
+        return actionFailure(error)
     }
+}

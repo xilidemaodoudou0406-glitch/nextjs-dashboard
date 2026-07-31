@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_URL: postgresql://user:password@127.0.0.1:5432/ai_chatbot
+      AUTH_SECRET: ci-auth-secret-that-is-at-least-32-characters
+      AUTH_TRUST_HOST: 'true'
+      DEEPSEEK_API_KEY: ci-placeholder-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_URL: postgresql://user:password@127.0.0.1:5432/ai_chatbot
+      AUTH_SECRET: ci-auth-secret-that-is-at-least-32-characters
+      AUTH_TRUST_HOST: 'true'
+      DEEPSEEK_API_KEY: ci-placeholder-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm build
+      - run: pnpm test:e2e
