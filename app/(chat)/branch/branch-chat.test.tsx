@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatMessage } from '@/app/lib/ai/message'
@@ -7,6 +7,7 @@ import type { BranchConversation } from '@/app/lib/branches/types'
 const mocks = vi.hoisted(() => ({
   useChat: vi.fn(),
   sendMessage: vi.fn(),
+  regenerate: vi.fn(),
   transport: vi.fn(),
   renderedMessages: vi.fn(),
 }))
@@ -81,6 +82,7 @@ describe('BranchChat', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.sendMessage.mockResolvedValue(undefined)
+    mocks.regenerate.mockResolvedValue(undefined)
     mocks.useChat.mockReturnValue({
       messages: [inheritedMessage, firstBranchMessage],
       sendMessage: mocks.sendMessage,
@@ -88,6 +90,7 @@ describe('BranchChat', () => {
       stop: vi.fn(),
       error: undefined,
       clearError: vi.fn(),
+      regenerate: mocks.regenerate,
     })
   })
 
@@ -109,11 +112,30 @@ describe('BranchChat', () => {
     expect(mocks.renderedMessages).toHaveBeenCalledWith([
       firstBranchMessage,
     ])
-    expect(mocks.transport).toHaveBeenCalledWith({
-      api: '/api/chat',
+    expect(mocks.transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        api: '/api/chat',
+        body: {
+          id: branchId,
+          chatMode: 'branch',
+          modelId: 'deepseek-chat',
+        },
+        prepareSendMessagesRequest: expect.any(Function),
+      }),
+    )
+
+    const transportOptions = mocks.transport.mock.calls[0][0]
+    expect(
+      transportOptions.prepareSendMessagesRequest({
+        body: transportOptions.body,
+        messages: [inheritedMessage, firstBranchMessage],
+      }),
+    ).toEqual({
       body: {
         id: branchId,
+        chatMode: 'branch',
         modelId: 'deepseek-chat',
+        messages: [firstBranchMessage],
       },
     })
   })
@@ -143,5 +165,23 @@ describe('BranchChat', () => {
         parts: [{ type: 'text', text: '请解释这部分' }],
       })
     })
+  })
+
+  it('regenerates an unanswered persisted user message without inserting another one', () => {
+    render(
+      <BranchChat
+        conversation={conversation}
+        modelId="deepseek-chat"
+      />,
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '重新生成回答' }),
+    )
+
+    expect(mocks.regenerate).toHaveBeenCalledWith({
+      messageId: firstMessageId,
+    })
+    expect(mocks.sendMessage).not.toHaveBeenCalled()
   })
 })

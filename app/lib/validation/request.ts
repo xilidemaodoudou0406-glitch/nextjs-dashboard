@@ -67,6 +67,8 @@ export const messageIdSchema = z.string().uuid('messageId 必须是合法的 UUI
 export const chatRequestSchema = z
   .object({
     id: chatIdSchema,
+    // main 保持现有完整消息协议；branch 只提交最新问题，历史由服务端权威组装。
+    chatMode: z.enum(['main', 'branch']).optional().default('main'),
     modelId: modelIdSchema.optional().default(modelIds[0]),
     messages: z.array(uiMessageSchema).min(1, 'messages 不能为空'),
   })

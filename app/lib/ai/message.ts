@@ -51,3 +51,17 @@ export function isMessageStableForActions(message: ChatMessage): boolean {
     message.metadata?.persistenceStatus === 'completed'
   )
 }
+
+/**
+ * 找出一条已经进入聊天记录、但后面还没有 assistant 回答的用户消息。
+ *
+ * 正常发送期间消息列表也会暂时以 user 结尾，因此调用方还需要结合
+ * useChat 的运行状态判断：只有请求已经回到 ready/error 时才显示重试。
+ * 主对话和分支共用这条判断，避免形成两套不一致的异常恢复规则。
+ */
+export function getUnansweredUserMessage(
+  messages: ChatMessage[],
+): ChatMessage | null {
+  const lastMessage = messages.at(-1)
+  return lastMessage?.role === 'user' ? lastMessage : null
+}

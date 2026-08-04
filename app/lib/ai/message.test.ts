@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  getUnansweredUserMessage,
   getMessagePersistenceStatus,
   isChatRequestInProgress,
   isMessageStableForActions,
@@ -34,5 +35,25 @@ describe('chat state contract', () => {
 
     expect(isMessageStableForActions(completedMessage)).toBe(true)
     expect(isMessageStableForActions(interruptedMessage)).toBe(false)
+  })
+
+  it('recognizes a conversation that ends with an unanswered user message', () => {
+    const userMessage: ChatMessage = {
+      id: '065c30b8-a52a-48e1-87bd-b1e2801a88f9',
+      role: 'user',
+      metadata: { persistenceStatus: 'completed' },
+      parts: [{ type: 'text', text: '尚未回答的问题' }],
+    }
+    const assistantMessage: ChatMessage = {
+      id: '535823cd-d4d2-4341-bb7b-37bbef72c1e7',
+      role: 'assistant',
+      metadata: { persistenceStatus: 'completed' },
+      parts: [{ type: 'text', text: '回答' }],
+    }
+
+    expect(getUnansweredUserMessage([userMessage])).toBe(userMessage)
+    expect(
+      getUnansweredUserMessage([userMessage, assistantMessage]),
+    ).toBeNull()
   })
 })

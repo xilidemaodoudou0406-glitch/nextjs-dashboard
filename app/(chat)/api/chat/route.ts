@@ -18,6 +18,7 @@ import {
   chatRequestSchema,
   parseJsonRequest,
 } from '@/app/lib/validation/request'
+import { getBranchConversation } from '@/app/lib/branches/data'
 
 const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
@@ -56,7 +57,7 @@ export async function POST(req: Request) {
 
     // 2. 运行时校验请求；modelId 缺失时暂时使用服务端默认模型
     const parsedRequest = await parseJsonRequest(req, chatRequestSchema)
-    const { id: chatId, modelId } = parsedRequest
+    const { id: chatId, chatMode, modelId } = parsedRequest
     const messages: ChatMessage[] = parsedRequest.messages
 
     // 3. 取最后一条用户消息
@@ -69,25 +70,37 @@ export async function POST(req: Request) {
     const userText = getMessageText(lastMessage)
 
     // 4. 只查询当前用户拥有的 chat
-    let ownedChat = await sql<{ id: string }[]>`
-      SELECT id
+    let ownedChat = await sql<
+      { id: string; parent_chat_id: string | null }[]
+    >`
+      SELECT id, parent_chat_id
       FROM chats
       WHERE id = ${chatId} AND user_id = ${user.id}
     `
 
     if (ownedChat.length === 0) {
+      // 分支必须由 createBranchOnFirstSubmit 创建并绑定合法锚点。
+      // 如果一个 branch 请求携带了不存在的 ID，不能把它降级创建成普通主对话。
+      if (chatMode === 'branch') {
+        throw resourceNotFoundError('分支不存在')
+      }
+
       // chatId 如果已被其他用户占用，ON CONFLICT 不会覆盖原资源
-      const insertedChat = await sql<{ id: string }[]>`
+      const insertedChat = await sql<
+        { id: string; parent_chat_id: string | null }[]
+      >`
         INSERT INTO chats (id, user_id, title)
         VALUES (${chatId}, ${user.id}, '新对话')
         ON CONFLICT (id) DO NOTHING
-        RETURNING id
+        RETURNING id, parent_chat_id
       `
 
       if (insertedChat.length === 0) {
         // 兼容同一用户的并发首条请求，同时不泄露其他用户的资源是否存在
-        ownedChat = await sql<{ id: string }[]>`
-          SELECT id
+        ownedChat = await sql<
+          { id: string; parent_chat_id: string | null }[]
+        >`
+          SELECT id, parent_chat_id
           FROM chats
           WHERE id = ${chatId} AND user_id = ${user.id}
         `
@@ -96,6 +109,7 @@ export async function POST(req: Request) {
           throw resourceNotFoundError('对话不存在')
         }
       } else {
+        ownedChat = insertedChat
         const title = await generateTitle(userText)
         await sql`
           UPDATE chats
@@ -103,6 +117,18 @@ export async function POST(req: Request) {
           WHERE id = ${chatId} AND user_id = ${user.id}
         `
       }
+    }
+
+    const currentChat = ownedChat[0]
+    const isBranchChat = currentChat.parent_chat_id !== null
+
+    // 请求声明的模式必须与数据库中的真实关系一致。模式不匹配统一按资源不存在处理，
+    // 既不会把主对话误当分支，也不会向客户端泄露其他资源结构。
+    if (
+      (chatMode === 'branch' && !isBranchChat) ||
+      (chatMode === 'main' && isBranchChat)
+    ) {
+      throw resourceNotFoundError('对话不存在')
     }
 
     // 5. INSERT ... SELECT 再次把消息写入限定在当前用户的对话中
@@ -136,14 +162,37 @@ export async function POST(req: Request) {
       }
     }
 
-    // 6. 调用 AI
+    // 6. 组装真正交给模型的上下文。
+    // 分支客户端只提交最新用户消息；服务端依据 branchId 重新读取“主线截至锚点
+    // 的前缀 + 分支自身消息”。因此客户端无法把锚点之后的主消息或其他分支消息
+    // 塞进模型上下文。主对话暂时保留原协议，避免破坏当前图片 parts 的传递。
+    let modelContextMessages = messages
+
+    if (isBranchChat) {
+      const branchConversation = await getBranchConversation({
+        userId: user.id,
+        parentChatId: currentChat.parent_chat_id!,
+        branchId: chatId,
+      })
+
+      if (!branchConversation) {
+        throw resourceNotFoundError('分支不存在')
+      }
+
+      modelContextMessages = [
+        ...branchConversation.inheritedMessages,
+        ...branchConversation.branchMessages,
+      ]
+    }
+
+    // 7. 调用 AI
     // A3：assistant 在开始流式输出前就拥有稳定 UUID。
     // 同一个值会交给 AI SDK 的 UI 消息和数据库记录。
     const assistantMessageId = crypto.randomUUID()
     const result = streamText({
       model: models[modelId],
       system: '你是一个有帮助的 AI 助手。用中文回复。回复要简洁。',
-      messages: await convertToModelMessages(messages),
+      messages: await convertToModelMessages(modelContextMessages),
       maxOutputTokens: 1000,
       abortSignal: req.signal,
     })

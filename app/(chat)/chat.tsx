@@ -3,17 +3,28 @@
 
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { useState, useEffect, useMemo, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import {
+  useCallback,
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+} from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Messages from './messages'
 import ChatInput from './chat-input'
-import BranchPanel from './branch/branch-panel'
+import BranchPanel, {
+  type BranchPanelSource,
+} from './branch/branch-panel'
 import { Suggestions } from '@/app/components/suggestions'
 import {
+  getUnansweredUserMessage,
   getMessagePersistenceStatus,
+  isChatRequestInProgress,
   type ChatMessage,
   type MessagePersistenceStatus,
 } from '@/app/lib/ai/message'
+import { buildBranchUrl } from '@/app/lib/branches/url'
 
 interface Props {
   chatId: string
@@ -25,17 +36,37 @@ interface Props {
 export default function Chat({ chatId, initialMessages = [] }: Props) {
 
   const [input, setInput] = useState('')
+  const pathname = usePathname()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const branchIdFromUrl = searchParams.get('branch')
   const [activeBranchAnchor, setActiveBranchAnchor] =
     useState<ChatMessage | null>(null)
+  const [localBranchId, setLocalBranchId] = useState<string | null>(null)
+  const persistedBranchId = localBranchId ?? branchIdFromUrl
+  const activeBranch: BranchPanelSource | null = activeBranchAnchor
+    ? { kind: 'anchor', anchorMessage: activeBranchAnchor }
+    : persistedBranchId
+      ? { kind: 'branch', branchId: persistedBranchId }
+      : null
   const branchTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const router = useRouter()
+  const pendingFocusAnchorIdRef = useRef<string | null>(null)
+  const shouldRestoreBranchFocusRef = useRef(false)
   const [modelId, setModelId] = useState('deepseek-chat')
   // 记录每条assistant消息的完成状态
   const [livePersistenceStatuses, setLivePersistenceStatuses] = useState<
     Record<string, MessagePersistenceStatus>
   >({})
 
-  const { messages, sendMessage, status, stop, error } = useChat<ChatMessage>({
+  const {
+    messages,
+    sendMessage,
+    status,
+    stop,
+    error,
+    clearError,
+    regenerate,
+  } = useChat<ChatMessage>({
     id: chatId,
     // 这个初始化历史消息每次发消息都会传给后端（前提是触发这个之后）
 
@@ -45,7 +76,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
     messages: initialMessages, // 这个是传回来的历史消息
     transport: new DefaultChatTransport({ 
       api: '/api/chat',
-      body: { id: chatId },
+      body: { id: chatId, chatMode: 'main' },
     }),
     // ai流式响应全部结束的时候触发onfinish
     onFinish:({ message, isAbort, isDisconnect, isError, finishReason }) => {
@@ -101,6 +132,48 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       }
     }
   }, [messages, chatId])
+
+  // pushState 本身不会触发 popstate；只有用户按浏览器前进/后退时才清理
+  // 本地临时覆盖，让 useSearchParams 中的 URL branchId 重新成为唯一状态来源。
+  useEffect(() => {
+    const handleHistoryNavigation = () => {
+      setActiveBranchAnchor(null)
+      setLocalBranchId(null)
+    }
+
+    window.addEventListener('popstate', handleHistoryNavigation)
+    return () => {
+      window.removeEventListener('popstate', handleHistoryNavigation)
+    }
+  }, [])
+
+  /**
+   * 持久化分支关闭时 router.replace 可能重新渲染页面。若在调用 replace 的
+   * 同一帧 focus，焦点会随旧 DOM 被替换而丢失；因此等 URL 与本地面板状态都
+   * 已经关闭后再恢复。刷新恢复没有旧 ref 时，通过锚点 ID 查找按钮。
+   */
+  useEffect(() => {
+    if (
+      activeBranchAnchor ||
+      localBranchId ||
+      branchIdFromUrl ||
+      !shouldRestoreBranchFocusRef.current
+    ) {
+      return
+    }
+
+    const anchorMessageId = pendingFocusAnchorIdRef.current
+    const trigger =
+      branchTriggerRef.current ??
+      (anchorMessageId
+        ? document.querySelector<HTMLButtonElement>(
+            `[data-branch-anchor-id="${anchorMessageId}"]`,
+          )
+        : null)
+    trigger?.focus()
+    shouldRestoreBranchFocusRef.current = false
+    pendingFocusAnchorIdRef.current = null
+  }, [activeBranchAnchor, branchIdFromUrl, localBranchId])
   
   // 在chat-input中调用这个函数，这个函数更新messages并且调用transport发送请求
   const handleSubmit = (text: string, fileParts: { url: string; mediaType: string }[]) => {
@@ -142,6 +215,25 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       }),
     [livePersistenceStatuses, messages],
   )
+  const isBusy = isChatRequestInProgress(status)
+  const unansweredUserMessage = isBusy
+    ? null
+    : getUnansweredUserMessage(displayMessages)
+
+  /**
+   * 主对话和分支都使用 AI SDK 的 regenerate 重试“已经保存但没有回答”的
+   * 最后一条用户消息。messageId 保持不变，服务端幂等校验会复用原记录，
+   * 不会为了重试再插入一条重复 user 消息。
+   */
+  const retryLastResponse = () => {
+    if (!unansweredUserMessage || isBusy) return
+
+    clearError()
+    // 此处为useChat自带重试函数
+    void regenerate({ messageId: unansweredUserMessage.id }).catch(
+      () => undefined,
+    )
+  }
 
   /**
    * 主对话只保存“当前选中了哪个锚点”，不保存任何分支 messages。
@@ -153,12 +245,65 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   ) => {
     branchTriggerRef.current = trigger// 记录触发按钮，关闭分支面板时让它重新获得焦点
     setActiveBranchAnchor(message) // 设置当前锚点消息，BranchPanel 会根据这个锚点加载对应分支
+    setLocalBranchId(null)
+
+    // 从已打开的持久化分支切到另一个锚点时，旧 branchId 已经不能描述
+    // 当前面板。先移除它；如果该锚点已有/新建了分支，面板随后再写入新 ID。
+    if (branchIdFromUrl) {
+      router.replace(
+        buildBranchUrl({ pathname, searchParams, branchId: null }),
+        { scroll: false },
+      )
+    }
   }
 
-  const closeBranch = () => {
+  const closeBranch = useCallback((anchorMessageId?: string) => {
+    shouldRestoreBranchFocusRef.current = true
+    pendingFocusAnchorIdRef.current = anchorMessageId ?? null
     setActiveBranchAnchor(null)
-    window.requestAnimationFrame(() => branchTriggerRef.current?.focus())
-  }
+    setLocalBranchId(null)
+    router.replace(
+      buildBranchUrl({
+        pathname,
+        searchParams: new URLSearchParams(window.location.search),
+        branchId: null,
+      }),
+      { scroll: false },
+    )
+  }, [pathname, router])
+
+  /**
+   * BranchPanel 找到已有分支或首次创建成功后调用。此时数据库已经存在
+   * branchId，才把它写入 URL；单纯打开草稿不会污染地址和浏览历史。
+   */
+  const persistBranchInUrl = useCallback(
+    (branchId: string) => {
+      // 先用本地 ID 保持同一个 BranchPanel 实例，再异步更新 URL。这样首次
+      // 提交生成的 pending message ref 不会因为短暂卸载而丢失。
+      setActiveBranchAnchor(null)
+      setLocalBranchId(branchId)
+
+      const currentSearchParams = new URLSearchParams(
+        window.location.search,
+      )
+      if (currentSearchParams.get('branch') !== branchId) {
+        router.push(
+          buildBranchUrl({
+            pathname,
+            searchParams: currentSearchParams,
+            branchId,
+          }),
+          { scroll: false },
+        )
+      }
+    },
+    [pathname, router],
+  )
+
+  const handleBranchDeleted = useCallback(() => {
+    closeBranch()
+    router.refresh()
+  }, [closeBranch, router])
   
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -180,9 +325,36 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         )}
         </div>
 
-        {error && (
-          <div className="mx-4 mb-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            出错了：{error.message}
+        {(error || unansweredUserMessage) && !isBusy && (
+          <div
+            className="mx-4 mb-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700"
+            role="alert"
+          >
+            <p>
+              {error
+                ? `出错了：${error.message}`
+                : '上一条问题尚未获得回答。'}
+            </p>
+            <div className="mt-2 flex items-center gap-3">
+              {unansweredUserMessage && (
+                <button
+                  className="font-medium underline underline-offset-2"
+                  onClick={retryLastResponse}
+                  type="button"
+                >
+                  重新生成回答
+                </button>
+              )}
+              {error && (
+                <button
+                  className="underline underline-offset-2"
+                  onClick={clearError}
+                  type="button"
+                >
+                  关闭错误
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -197,13 +369,14 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         />
       </div>
 
-      {activeBranchAnchor && (
+      {activeBranch && (
         <BranchPanel
-          anchorMessage={activeBranchAnchor}
-          key={activeBranchAnchor.id}
           modelId={modelId}
+          onBranchPersisted={persistBranchInUrl}
           onClose={closeBranch}
+          onDeleted={handleBranchDeleted}
           parentChatId={chatId}
+          source={activeBranch}
         />
       )}
     </div>

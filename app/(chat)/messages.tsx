@@ -66,6 +66,8 @@ export default function Messages({
             // 重新跑这个 map
             // 对比新旧 DOM，发现"哦，最后一个 div 的文本变了"
             // 只更新那一个 DOM 节点
+
+            // 这里的messages已经是一个响应式的值，useState在useChat内部
               if (part.type === 'text') {
                 if (message.role === 'user') {
                     return <div key={idx} className="whitespace-pre-wrap">{part.text}</div>
@@ -82,6 +84,7 @@ export default function Messages({
                   <button
                     aria-label="基于这条回答打开分支"
                     className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 transition hover:bg-white hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    data-branch-anchor-id={message.id}
                     onClick={(event) =>
                       onOpenBranch(message, event.currentTarget)
                     }

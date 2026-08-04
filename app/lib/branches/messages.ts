@@ -12,6 +12,9 @@ import type {
  * 初始化数组中移除这条消息，随后再用同一个 ID 调用 sendMessage，避免 UI
  * 中出现两条相同的用户消息。
  */
+
+// useChat.sendMessage() 的语义就是“向当前消息列表新增一条用户消息，并发起请求”，
+// 它不会因为数组里已经存在相同 ID 就自动去重
 export function buildBranchInitialMessages(
   conversation: BranchConversation,
   pendingFirstMessage?: BranchFirstMessage,
@@ -22,7 +25,7 @@ export function buildBranchInitialMessages(
   ]
 
   if (!pendingFirstMessage) return messages
-
+  // 因为后面useChat会将新对话塞入，故这边得去掉，否则会重复
   return messages.filter(
     (message) => message.id !== pendingFirstMessage.id,
   )

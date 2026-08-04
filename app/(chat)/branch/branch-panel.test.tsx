@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatMessage } from '@/app/lib/ai/message'
@@ -7,25 +8,45 @@ import type { BranchConversation } from '@/app/lib/branches/types'
 const mocks = vi.hoisted(() => ({
   find: vi.fn(),
   create: vi.fn(),
+  delete: vi.fn(),
   read: vi.fn(),
   branchChat: vi.fn(),
+  close: vi.fn(),
+  deleted: vi.fn(),
+  persisted: vi.fn(),
+  stop: vi.fn(async () => undefined),
 }))
 
 vi.mock('../branch-actions', () => ({
   findBranchByAnchor: mocks.find,
   createBranchOnFirstSubmit: mocks.create,
+  deleteBranch: mocks.delete,
   readBranchConversation: mocks.read,
 }))
 
-vi.mock('./branch-chat', () => ({
-  default: (props: {
-    conversation: BranchConversation
-    pendingFirstMessage?: { id: string; content: string }
-  }) => {
-    mocks.branchChat(props)
-    return <div>已加载分支聊天</div>
-  },
-}))
+vi.mock('./branch-chat', async () => {
+  const React = await vi.importActual<typeof import('react')>('react')
+
+  return {
+    default: React.forwardRef(function MockBranchChat(
+      props: {
+        conversation: BranchConversation
+        pendingFirstMessage?: { id: string; content: string }
+      },
+      ref: React.ForwardedRef<{
+        isBusy: () => boolean
+        stopGeneration: () => Promise<void>
+      }>,
+    ) {
+      React.useImperativeHandle(ref, () => ({
+        isBusy: () => false,
+        stopGeneration: mocks.stop,
+      }))
+      mocks.branchChat(props)
+      return <div>已加载分支聊天</div>
+    }),
+  }
+})
 
 import BranchPanel from './branch-panel'
 
@@ -61,15 +82,36 @@ const conversation: BranchConversation = {
   ],
 }
 
-function renderPanel() {
-  return render(
-    <BranchPanel
-      anchorMessage={anchorMessage}
-      modelId="deepseek-chat"
-      onClose={vi.fn()}
-      parentChatId={parentChatId}
-    />,
-  )
+function renderPanel(
+  initialSource:
+    | { kind: 'anchor'; anchorMessage: ChatMessage }
+    | { kind: 'branch'; branchId: string } = {
+      kind: 'anchor',
+      anchorMessage,
+    },
+) {
+  function Harness() {
+    const [source, setSource] = useState<
+      | { kind: 'anchor'; anchorMessage: ChatMessage }
+      | { kind: 'branch'; branchId: string }
+    >(initialSource)
+
+    return (
+      <BranchPanel
+        modelId="deepseek-chat"
+        onBranchPersisted={(nextBranchId) => {
+          mocks.persisted(nextBranchId)
+          setSource({ kind: 'branch', branchId: nextBranchId })
+        }}
+        onClose={mocks.close}
+        onDeleted={mocks.deleted}
+        parentChatId={parentChatId}
+        source={source}
+      />
+    )
+  }
+
+  return render(<Harness />)
 }
 
 describe('BranchPanel', () => {
@@ -149,6 +191,7 @@ describe('BranchPanel', () => {
       parentChatId,
       branchId,
     })
+    expect(mocks.persisted).toHaveBeenCalledWith(branchId)
 
     await waitFor(() => {
       expect(mocks.branchChat).toHaveBeenCalledWith(
@@ -184,9 +227,75 @@ describe('BranchPanel', () => {
       await screen.findByText('已加载分支聊天'),
     ).toBeInTheDocument()
     expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.persisted).toHaveBeenCalledWith(branchId)
     expect(mocks.read).toHaveBeenCalledWith({
       parentChatId,
       branchId,
+    })
+  })
+
+  it('restores a branch directly from a URL branch id', async () => {
+    mocks.read.mockResolvedValueOnce({
+      ok: true,
+      data: conversation,
+    })
+
+    renderPanel({ kind: 'branch', branchId })
+
+    expect(
+      await screen.findByText('已加载分支聊天'),
+    ).toBeInTheDocument()
+    expect(mocks.find).not.toHaveBeenCalled()
+    expect(mocks.read).toHaveBeenCalledWith({
+      parentChatId,
+      branchId,
+    })
+  })
+
+  it('deletes a persisted branch without deleting the parent chat', async () => {
+    mocks.read.mockResolvedValueOnce({
+      ok: true,
+      data: conversation,
+    })
+    mocks.delete.mockResolvedValueOnce({
+      ok: true,
+      data: { branchId },
+    })
+
+    renderPanel({ kind: 'branch', branchId })
+    await screen.findByText('已加载分支聊天')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: '删除分支对话' }),
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: '确认删除' }),
+    )
+
+    await waitFor(() => {
+      expect(mocks.delete).toHaveBeenCalledWith({
+        parentChatId,
+        branchId,
+      })
+      expect(mocks.deleted).toHaveBeenCalled()
+    })
+  })
+
+  it('stops an active branch before closing the panel', async () => {
+    mocks.read.mockResolvedValueOnce({
+      ok: true,
+      data: conversation,
+    })
+
+    renderPanel({ kind: 'branch', branchId })
+    await screen.findByText('已加载分支聊天')
+    fireEvent.click(
+      screen.getByRole('button', { name: '关闭分支对话' }),
+    )
+
+    await waitFor(() => {
+      expect(mocks.stop).toHaveBeenCalled()
+      expect(mocks.close).toHaveBeenCalled()
     })
   })
 })

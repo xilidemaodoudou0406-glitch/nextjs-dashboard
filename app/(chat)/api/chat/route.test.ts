@@ -22,6 +22,13 @@ type UIResponseOptions = {
 }
 
 const mocks = vi.hoisted(() => ({
+  branchConversation: null as null | {
+    inheritedMessages: unknown[]
+    branchMessages: unknown[]
+  },
+  convertToModelMessages: vi.fn(async (messages: unknown[]) => messages),
+  getBranchConversation: vi.fn(),
+  ownedParentChatId: null as string | null,
   sqlCalls: [] as SqlCall[],
   uiResponseOptions: undefined as UIResponseOptions | undefined,
   userMessageAlreadyExists: false,
@@ -35,8 +42,11 @@ vi.mock('postgres', () => ({
     const text = strings.join('?').replace(/\s+/g, ' ').trim()
     mocks.sqlCalls.push({ text, values })
 
-    if (text.startsWith('SELECT id FROM chats')) {
-      return [{ id: '3d60516d-3443-4faa-862c-6c96f3eafa19' }]
+    if (text.startsWith('SELECT id, parent_chat_id FROM chats')) {
+      return [{
+        id: '3d60516d-3443-4faa-862c-6c96f3eafa19',
+        parent_chat_id: mocks.ownedParentChatId,
+      }]
     }
 
     if (text.startsWith('INSERT INTO messages')) {
@@ -79,8 +89,12 @@ vi.mock('@/app/lib/ai/provider', () => ({
   },
 }))
 
+vi.mock('@/app/lib/branches/data', () => ({
+  getBranchConversation: mocks.getBranchConversation,
+}))
+
 vi.mock('ai', () => ({
-  convertToModelMessages: vi.fn(async (messages: unknown[]) => messages),
+  convertToModelMessages: mocks.convertToModelMessages,
   generateText: vi.fn(),
   streamText: vi.fn(() => ({
     toUIMessageStreamResponse: (responseOptions: UIResponseOptions) => {
@@ -95,14 +109,21 @@ import { POST } from './route'
 const chatId = '3d60516d-3443-4faa-862c-6c96f3eafa19'
 const userMessageId = '065c30b8-a52a-48e1-87bd-b1e2801a88f9'
 
-async function startChatRequest() {
+async function startChatRequest({
+  chatMode = 'main',
+  messages,
+}: {
+  chatMode?: 'main' | 'branch'
+  messages?: unknown[]
+} = {}) {
   return POST(
     new Request('http://localhost/api/chat', {
       method: 'POST',
       body: JSON.stringify({
         id: chatId,
+        chatMode,
         modelId: 'deepseek-chat',
-        messages: [
+        messages: messages ?? [
           {
             id: userMessageId,
             role: 'user',
@@ -119,6 +140,13 @@ describe('POST /api/chat message persistence', () => {
     mocks.sqlCalls.length = 0
     mocks.uiResponseOptions = undefined
     mocks.userMessageAlreadyExists = false
+    mocks.ownedParentChatId = null
+    mocks.convertToModelMessages.mockClear()
+    mocks.getBranchConversation.mockReset()
+    mocks.getBranchConversation.mockImplementation(async () =>
+      mocks.branchConversation,
+    )
+    mocks.branchConversation = null
   })
 
   it('uses one ID for the user UI message and database record', async () => {
@@ -144,6 +172,47 @@ describe('POST /api/chat message persistence', () => {
         text.startsWith('SELECT message.id'),
       ),
     ).toBe(true)
+  })
+
+  it('rebuilds branch context on the server instead of trusting client history', async () => {
+    const parentChatId = 'cae9bc5c-34b7-4209-91af-42af3e89ceab'
+    const inheritedMessage = {
+      id: '7a286f85-2ba8-481c-89fe-5224ae31f77a',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '数据库中的锚点回答' }],
+    }
+    const persistedBranchMessage = {
+      id: userMessageId,
+      role: 'user',
+      parts: [{ type: 'text', text: '你好' }],
+    }
+    mocks.ownedParentChatId = parentChatId
+    mocks.branchConversation = {
+      inheritedMessages: [inheritedMessage],
+      branchMessages: [persistedBranchMessage],
+    }
+
+    const response = await startChatRequest({
+      chatMode: 'branch',
+      messages: [
+        {
+          id: userMessageId,
+          role: 'user',
+          parts: [{ type: 'text', text: '你好' }],
+        },
+      ],
+    })
+
+    expect(response.status).toBe(200)
+    expect(mocks.getBranchConversation).toHaveBeenCalledWith({
+      userId: 'adad85e4-e660-4e9b-a7f5-b19848230d33',
+      parentChatId,
+      branchId: chatId,
+    })
+    expect(mocks.convertToModelMessages).toHaveBeenCalledWith([
+      inheritedMessage,
+      persistedBranchMessage,
+    ])
   })
 
   it.each([
