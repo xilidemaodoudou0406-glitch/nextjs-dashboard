@@ -1,16 +1,13 @@
 // app/(chat)/chat/[id]/page.tsx
 import { notFound } from 'next/navigation'
-import postgres from 'postgres'
 import Chat from '../../chat'
-import { env } from '@/app/lib/env'
+import { sql } from '@/app/lib/db/client'
 import { requireUser } from '@/app/lib/auth/require-user'
 import { chatIdSchema } from '@/app/lib/validation/request'
 import type {
   ChatMessage,
   MessagePersistenceStatus,
 } from '@/app/lib/ai/message'
-
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
 export default async function ChatPage({
   params,

@@ -1,13 +1,10 @@
 'use server'
 
-import postgres from 'postgres'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { signIn } from '@/auth'
 import { AuthError } from 'next-auth'
-import { env } from '@/app/lib/env'
-
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
+import { sql } from '@/app/lib/db/client'
 
 // 表单校验 schema
 const RegisterSchema = z.object({

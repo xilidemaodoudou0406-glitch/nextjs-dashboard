@@ -50,6 +50,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       ? { kind: 'branch', branchId: persistedBranchId }
       : null
   const branchTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const submissionLockRef = useRef(false)
   const pendingFocusAnchorIdRef = useRef<string | null>(null)
   const shouldRestoreBranchFocusRef = useRef(false)
   const [modelId, setModelId] = useState('deepseek-chat')
@@ -106,6 +107,13 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       router.refresh()
     }
   })
+  const isBusy = isChatRequestInProgress(status)
+
+  // sendMessage 更新 React 状态前存在一个很短的时间窗。锁放在真正的发送入口，
+  // 因而输入框、建议词和以后新增的入口都无法在这个时间窗内重复提交。
+  useEffect(() => {
+    if (!isBusy) submissionLockRef.current = false
+  }, [isBusy])
   // 此处我有一个疑问：这边是把历史消息和新消息打包一起发给后端，
 
   // 上面那个问题：区别只在谁来拼上下文。你现在是客户端拼，另一种是服务端拼。客户端拼的好处是不用每次额外查一次数据库；服务端拼的好处是客户端传的数据更少、更不容易被篡改上下文。两种都是常见做法。
@@ -177,7 +185,16 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   
   // 在chat-input中调用这个函数，这个函数更新messages并且调用transport发送请求
   const handleSubmit = (text: string, fileParts: { url: string; mediaType: string }[]) => {
-    if (!text.trim() && fileParts.length === 0) return
+    if (
+      isBusy ||
+      submissionLockRef.current ||
+      (!text.trim() && fileParts.length === 0)
+    ) {
+      return
+    }
+
+    submissionLockRef.current = true
+    clearError()
     const userMessageId = crypto.randomUUID()
 
     void sendMessage({
@@ -195,6 +212,10 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         })),
       ],
     })
+      .catch(() => undefined)
+      .finally(() => {
+        submissionLockRef.current = false
+      })
     setInput('')
   }
   // 作用是把是否终断这个状态加到messages这个数组中去，
@@ -215,7 +236,6 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
       }),
     [livePersistenceStatuses, messages],
   )
-  const isBusy = isChatRequestInProgress(status)
   const unansweredUserMessage = isBusy
     ? null
     : getUnansweredUserMessage(displayMessages)
@@ -308,13 +328,15 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex flex-1 flex-col justify-center overflow-y-auto p-4">
+        <div className="flex min-h-0 flex-1 flex-col">
         {/* chat组件就是右侧聊天区域，要是有消息就不显示建议，即变成对话框，显示消息 */}
         {/* 点击建议按钮时，调用 onSend 函数发送消息，onSend 函数会调用 sendMessage 方法发送消息
         发送消息后，messages 会更新，组件重新渲染，显示消息列表
         发送消息后，onFinish 回调会触发 router.refresh()，刷新侧边栏 */}
         {messages.length === 0 ? (
-          <Suggestions onSend={(text) => handleSubmit(text, [])} />
+          <div className="flex flex-1 items-center justify-center p-4">
+            <Suggestions onSend={(text) => handleSubmit(text, [])} />
+          </div>
         ) : (
           <Messages
             chatId={chatId}

@@ -33,8 +33,22 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: ai_chatbot
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ai_chatbot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
-      POSTGRES_URL: postgresql://user:password@127.0.0.1:5432/ai_chatbot
+      POSTGRES_URL: postgresql://postgres:postgres@127.0.0.1:5432/ai_chatbot
       AUTH_SECRET: ci-auth-secret-that-is-at-least-32-characters
       AUTH_TRUST_HOST: 'true'
       DEEPSEEK_API_KEY: ci-placeholder-key
@@ -49,5 +63,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm db:migrate
       - run: pnpm build
       - run: pnpm test:e2e

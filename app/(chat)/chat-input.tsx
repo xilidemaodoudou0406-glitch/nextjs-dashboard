@@ -3,7 +3,7 @@
 'use client'
 
 import Image from 'next/image'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { Image as ImageIcon, X } from 'lucide-react'
 import { ModelSelector } from '../components/model-selector'
 import {
@@ -29,7 +29,6 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
   // 用于存放URL.createObjectURL(file)生成的URL
   const [previews, setPreviews] = useState<string[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const submittingRef = useRef(false)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -52,10 +51,8 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
 
   // 发送：用已有 previews（blob URL）+ attachments 拼 fileParts
   const submitMessage = () => {
-    if (submittingRef.current) return // 防止快速连点/连按 Enter 重复发送
+    if (isStreaming) return
     if (!value.trim() && attachments.length === 0) return;
-
-    submittingRef.current = true
 
     // previews 已在 handleFileChange 中生成（blob URL），直接用
     const fileParts = attachments.map((file, i) => ({
@@ -69,13 +66,6 @@ export default function ChatInput({ value, onChange, onSubmit, status, onStop, m
     setAttachments([]);
     setPreviews([]);
   };
-
-  // value 被 onChange('') 清空后解锁，允许下一次发送
-  useEffect(() => {
-    if (!value) {
-      submittingRef.current = false
-    }
-  }, [value])
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()

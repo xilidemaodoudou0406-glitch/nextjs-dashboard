@@ -6,8 +6,7 @@ import {
   getMessageText,
   type ChatMessage,
 } from '@/app/lib/ai/message'
-import postgres from 'postgres'
-import { env } from '@/app/lib/env'
+import { sql } from '@/app/lib/db/client'
 import { requireUser } from '@/app/lib/auth/require-user'
 import {
   resourceNotFoundError,
@@ -19,8 +18,6 @@ import {
   parseJsonRequest,
 } from '@/app/lib/validation/request'
 import { getBranchConversation } from '@/app/lib/branches/data'
-
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
 
 // ai生成标题函数
 async function generateTitle(firstMessage:string):Promise<string> {

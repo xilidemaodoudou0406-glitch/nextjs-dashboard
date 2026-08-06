@@ -1,8 +1,7 @@
 'use server'
 
-import postgres from "postgres"
 import { revalidatePath } from 'next/cache'
-import { env } from '@/app/lib/env'
+import { sql } from '@/app/lib/db/client'
 import { requireUser } from '@/app/lib/auth/require-user'
 import {
     actionFailure,
@@ -15,8 +14,6 @@ import {
     messageFeedbackSchema,
     parseInput,
 } from '@/app/lib/validation/request'
-
-const sql = postgres(env.POSTGRES_URL,{ ssl: 'require' })
 
 /**
  * 删除当前用户的一条主对话。

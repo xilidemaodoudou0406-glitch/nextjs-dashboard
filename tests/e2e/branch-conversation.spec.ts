@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 
 import { expect, test } from '@playwright/test'
 import postgres from 'postgres'
+import { getPostgresOptions } from '../../app/lib/db/options'
 
 // Playwright 测试进程不会像 Next.js 一样自动加载 .env.local。
 // Node 24 的 loadEnvFile 只把变量加载进当前测试进程，不会输出任何密钥。
@@ -18,7 +19,7 @@ if (!databaseUrl) {
   throw new Error('运行分支 E2E 前需要配置 POSTGRES_URL')
 }
 
-const sql = postgres(databaseUrl, { ssl: 'require' })
+const sql = postgres(databaseUrl, getPostgresOptions(databaseUrl))
 const testPassword = 'branch-e2e-password'
 const testEmail = `branch-e2e-${crypto.randomUUID()}@example.com`
 const parentChatId = crypto.randomUUID()

@@ -1,5 +1,3 @@
-import postgres from 'postgres'
-
 import type { ChatMessage, MessagePersistenceStatus } from '@/app/lib/ai/message'
 import type {
   BranchAnchorLookup,
@@ -7,9 +5,7 @@ import type {
   BranchFirstMessage,
   BranchSummary,
 } from '@/app/lib/branches/types'
-import { env } from '@/app/lib/env'
-
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
+import { sql } from '@/app/lib/db/client'
 
 type BranchRow = {
   id: string

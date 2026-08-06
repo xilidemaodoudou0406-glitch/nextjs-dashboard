@@ -1,7 +1,8 @@
 // app/(chat)/messages.tsx
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { WheelEvent } from 'react'
 import { GitBranch } from 'lucide-react'
 import Markdown from './markdown'
 import { MessageFeedback } from '@/app/components/message-feedback'
@@ -30,11 +31,106 @@ export default function Messages({
   onOpenBranch,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const isNearBottomRef = useRef(true) // 决定是否滚动
+  const userPausedAutoScrollRef = useRef(false)// 用户主动暂停跟随
+  const hasDownwardWheelIntentRef = useRef(false)// 是否出现向下滚轮动作
+  const [isNearBottom, setIsNearBottom] = useState(true)
+
+  // 作为依赖，加usecallback
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = 'smooth') => {
+      const container = scrollContainerRef.current
+      if (!container) return
+      // 防御性编程：前面一个if代表现代浏览器（一般就是命中此if）
+      if (typeof container.scrollTo === 'function') {
+        container.scrollTo({ top: container.scrollHeight, behavior })
+      } else {
+        // 兼容旧浏览器，直接滚动到底部 bottomRef 用来兜底
+        bottomRef.current?.scrollIntoView({ behavior })
+      }
+
+      userPausedAutoScrollRef.current = false
+      hasDownwardWheelIntentRef.current = false
+      isNearBottomRef.current = true
+      setIsNearBottom(true) // 点击回到底部又继续开启自动跟随状态
+    },
+    [],
+  )
+
+  const handleScroll = () => {
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    const distanceFromBottom =
+      container.scrollHeight -
+        container.scrollTop -
+        container.clientHeight
+
+    // 暂停后，单纯靠近底部不能恢复跟随；必须先出现一次向下滚轮动作。
+    if (userPausedAutoScrollRef.current) {
+      const shouldResume =
+        hasDownwardWheelIntentRef.current && distanceFromBottom <= 80
+      // 一次向下滚轮动作只参与紧随其后的这次位置判断，避免旧意图残留。
+      hasDownwardWheelIntentRef.current = false
+      // 锁在这边提前return ，使isNearBottomRef无法更新为true
+      if (!shouldResume) {
+        isNearBottomRef.current = false
+        setIsNearBottom(false)
+        return
+      }
+
+      userPausedAutoScrollRef.current = false
+    }
+
+    // 非主动暂停状态下保留少量像素误差，避免布局小数导致底部误判。
+    const nextIsNearBottom = distanceFromBottom <= 80
+
+    isNearBottomRef.current = nextIsNearBottom
+    setIsNearBottom(nextIsNearBottom)
+  }
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const container = scrollContainerRef.current
+    if (!container || event.deltaY === 0) return
+
+    if (event.deltaY > 0) {
+      hasDownwardWheelIntentRef.current = true
+
+      // wheel 发生在浏览器更新 scrollTop 之前；如果此刻已经在底部 80px 内，
+      // 可以立刻恢复。否则交给随后触发的 scroll 使用更新后的位置判断。
+      const distanceFromBottom =
+        container.scrollHeight -
+        container.scrollTop -
+        container.clientHeight
+
+      if (
+        userPausedAutoScrollRef.current &&
+        distanceFromBottom <= 80
+      ) {
+        userPausedAutoScrollRef.current = false
+        hasDownwardWheelIntentRef.current = false
+        isNearBottomRef.current = true
+        setIsNearBottom(true)
+      }
+
+      return
+    }
+
+    // wheel 比 scroll 更早表达用户意图：滚轮刚向上就立刻停止流式自动跟随，
+    // 避免下一个 token 到达时把尚未离开底部阈值的用户重新拉回去。
+    hasDownwardWheelIntentRef.current = false
+    userPausedAutoScrollRef.current = true
+    isNearBottomRef.current = false
+    setIsNearBottom(false)
+  }
   
-  // 新消息自动滚动到底部
+  // 新消息自动滚动到底部，但不能打断用户主动向上阅读历史。
+  // 流式阶段使用 auto，避免每个 token 都启动一次平滑滚动动画。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, status])
+    if (!isNearBottomRef.current) return
+    scrollToBottom(status === 'streaming' ? 'auto' : 'smooth')
+  }, [messages, scrollToBottom, status])
   
   if (messages.length === 0) {
     return (
@@ -45,7 +141,16 @@ export default function Messages({
   }
   
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
+    <div className="relative min-h-0 flex-1">
+      <div
+        aria-live="polite"
+        aria-relevant="additions text"
+        className="h-full overflow-y-auto px-4 py-6 space-y-4"
+        onScroll={handleScroll}
+        onWheelCapture={handleWheel}
+        ref={scrollContainerRef}
+        role="log"
+      >
       {messages.map((message) => (
         <div
           key={message.id}
@@ -117,7 +222,18 @@ export default function Messages({
         </div>
       )}
       
-      <div ref={bottomRef} />
+        <div ref={bottomRef} />
+      </div>
+
+      {!isNearBottom && (
+        <button
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 shadow-md transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onClick={() => scrollToBottom('smooth')}
+          type="button"
+        >
+          回到底部
+        </button>
+      )}
     </div>
   )
 }

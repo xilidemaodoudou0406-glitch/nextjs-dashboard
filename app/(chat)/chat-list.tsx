@@ -1,9 +1,6 @@
 // app/(chat)/chat-list.tsx
-import postgres from 'postgres'
 import ChatListClient from './chat-list-client'
-import { env } from '@/app/lib/env'
-
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
+import { sql } from '@/app/lib/db/client'
 
 export interface ChatItem {
   id: string

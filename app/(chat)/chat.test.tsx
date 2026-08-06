@@ -97,6 +97,20 @@ describe('Chat message identity', () => {
     )
   })
 
+  it('blocks rapid duplicate submissions at the shared chat boundary', () => {
+    render(
+      <Chat chatId="3d60516d-3443-4faa-862c-6c96f3eafa19" />,
+    )
+    const suggestion = screen.getByRole('button', {
+      name: '发送建议问题',
+    })
+
+    fireEvent.click(suggestion)
+    fireEvent.click(suggestion)
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1)
+  })
+
   it('regenerates the last persisted user message after a failed response', () => {
     const unansweredMessage = {
       id: '065c30b8-a52a-48e1-87bd-b1e2801a88f9',

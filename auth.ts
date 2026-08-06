@@ -2,12 +2,10 @@
 import NextAuth from 'next-auth'
 import Credentials from 'next-auth/providers/credentials'
 import { authConfig } from './auth.config'
-import postgres from 'postgres'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { env } from '@/app/lib/env'
-// 连接数据库
-const sql = postgres(env.POSTGRES_URL, { ssl: 'require' })
+import { sql } from '@/app/lib/db/client'
 
 // 从数据库查用户
 async function getUser(email: string) {
