@@ -150,7 +150,7 @@ export default function ChatInput({
 
       // 上传期间主对话可能从其他入口开始请求；只有真正进入 useChat 的消息
       // 才能清空草稿，避免公网图片已上传但本地输入被误删。
-      const wasSubmitted = onSubmit(value, fileParts)
+      const wasSubmitted = onSubmit(value, fileParts) // 返回布尔
       if (!wasSubmitted) {
         setUploadError('当前对话正在生成，请稍后再次发送')
         return

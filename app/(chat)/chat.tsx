@@ -326,9 +326,11 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   )
 
   const handleBranchDeleted = useCallback(() => {
+    // 删除 Action 已经刷新了主对话路径的服务端缓存。这里不要紧接着调用
+    // router.refresh()，否则它可能抢在 closeBranch 的 replace 之前完成，
+    // 让已经删除的 branch 查询参数短暂保留并重新挂载空面板。
     closeBranch()
-    router.refresh()
-  }, [closeBranch, router])
+  }, [closeBranch])
   
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden">

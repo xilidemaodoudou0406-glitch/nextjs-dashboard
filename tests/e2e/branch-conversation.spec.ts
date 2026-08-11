@@ -63,10 +63,38 @@ test('restores, navigates and deletes a branch on desktop and mobile', async ({
       VALUES (${parentChatId}, ${userId!}, '分支 E2E 主对话')
     `
     await transaction`
-      INSERT INTO messages (id, chat_id, role, content, status, created_at)
+      INSERT INTO messages (
+        id,
+        chat_id,
+        role,
+        content,
+        status,
+        parts,
+        created_at
+      )
       VALUES
-        (${parentUserMessageId}, ${parentChatId}, 'user', '主对话问题', 'completed', NOW() - INTERVAL '2 seconds'),
-        (${anchorMessageId}, ${parentChatId}, 'assistant', '用于 E2E 的锚点回答', 'completed', NOW() - INTERVAL '1 second')
+        (
+          ${parentUserMessageId},
+          ${parentChatId},
+          'user',
+          '主对话问题',
+          'completed',
+          jsonb_build_array(
+            jsonb_build_object('type', 'text', 'text', '主对话问题')
+          ),
+          NOW() - INTERVAL '2 seconds'
+        ),
+        (
+          ${anchorMessageId},
+          ${parentChatId},
+          'assistant',
+          '用于 E2E 的锚点回答',
+          'completed',
+          jsonb_build_array(
+            jsonb_build_object('type', 'text', 'text', '用于 E2E 的锚点回答')
+          ),
+          NOW() - INTERVAL '1 second'
+        )
     `
     await transaction`
       INSERT INTO chats (
@@ -85,10 +113,38 @@ test('restores, navigates and deletes a branch on desktop and mobile', async ({
       )
     `
     await transaction`
-      INSERT INTO messages (id, chat_id, role, content, status, created_at)
+      INSERT INTO messages (
+        id,
+        chat_id,
+        role,
+        content,
+        status,
+        parts,
+        created_at
+      )
       VALUES
-        (${branchUserMessageId}, ${branchId}, 'user', 'E2E 分支问题', 'completed', NOW()),
-        (${branchAssistantMessageId}, ${branchId}, 'assistant', 'E2E 分支回答', 'completed', NOW() + INTERVAL '1 second')
+        (
+          ${branchUserMessageId},
+          ${branchId},
+          'user',
+          'E2E 分支问题',
+          'completed',
+          jsonb_build_array(
+            jsonb_build_object('type', 'text', 'text', 'E2E 分支问题')
+          ),
+          NOW()
+        ),
+        (
+          ${branchAssistantMessageId},
+          ${branchId},
+          'assistant',
+          'E2E 分支回答',
+          'completed',
+          jsonb_build_array(
+            jsonb_build_object('type', 'text', 'text', 'E2E 分支回答')
+          ),
+          NOW() + INTERVAL '1 second'
+        )
     `
   })
 

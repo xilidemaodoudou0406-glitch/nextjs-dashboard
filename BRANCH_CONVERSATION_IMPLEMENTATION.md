@@ -1486,8 +1486,11 @@ stopGeneration()
 → 删除 branch chat
 → 外键级联删除分支 messages
 → 清理 URL 并关闭面板
-→ router.refresh()
 ```
+
+删除 Server Action 已通过 `revalidatePath` 刷新主对话路径缓存，因此客户端成功后只调用
+`closeBranch()` 清理本地状态和 URL。这里不能再紧接着调用 `router.refresh()`：刷新可能与
+`router.replace()` 竞争，使已经删除的 `branch` 查询参数短暂保留并重新挂载空面板。
 
 主对话和锚点消息不会命中删除条件。删除完成后再次点击原锚点，会重新进入草稿状态。
 
@@ -1571,6 +1574,10 @@ branchConversation.inheritedMessages
 
 E2E 使用独立测试用户和独立聊天数据，不调用真实模型；测试结束后删除测试用户，
 由外键级联清理对应的主对话和分支。
+
+测试夹具会同时写入 `messages.content` 和结构化 `messages.parts`。这是刷新恢复的必要条件：
+页面从 `parts` 还原 `UIMessage`，只写旧的 `content` 会让数据库记录存在但界面没有可渲染文本。
+真实 E2E 还验证了删除后清理 URL 的导航时序，防止 `replace` 与额外刷新发生竞态。
 
 ## 8. 四个阶段如何串成一条完整链路
 
@@ -1792,7 +1799,7 @@ branch 保存 branch_from_message_id
 ```text
 ESLint：通过
 TypeScript：通过
-Vitest：13 个测试文件、47 个测试通过
+Vitest：15 个测试文件、55 个测试通过
 Next.js production build：通过
 Playwright：2 个浏览器用例通过
 ```
@@ -1850,7 +1857,10 @@ Playwright：2 个浏览器用例通过
 
 
 
-# 四个阶段的功能概述
+# 附录：四个阶段的原始规划记录（历史材料）
+
+> 以下内容保留了实施前的阶段规划和讨论原文，便于回顾设计演进，其中“当前”“将要”和
+> “尚未完成”等措辞指当时状态，不代表现在的项目状态。当前实现请以前文第 1—13 节为准。
 
 # 阶段一
 

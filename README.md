@@ -155,6 +155,8 @@ pnpm test:e2e   # Playwright，需要可用的测试数据库
 
 GitHub Actions 会为 E2E 启动独立 PostgreSQL 服务，执行同一套迁移，再运行浏览器测试，避免依赖开发者已经准备好的远程数据库。
 
+当前验证基线（2026-08-11）：ESLint、TypeScript 和生产构建通过；Vitest 共 15 个测试文件、55 个用例通过；Playwright 共 2 个关键浏览器用例通过。
+
 ## 目录说明
 
 ```text
