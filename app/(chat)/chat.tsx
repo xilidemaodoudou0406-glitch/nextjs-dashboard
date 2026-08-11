@@ -184,13 +184,16 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
   }, [activeBranchAnchor, branchIdFromUrl, localBranchId])
   
   // 在chat-input中调用这个函数，这个函数更新messages并且调用transport发送请求
-  const handleSubmit = (text: string, fileParts: { url: string; mediaType: string }[]) => {
+  const handleSubmit = (
+    text: string,
+    fileParts: { url: string; mediaType: string; filename?: string }[],
+  ) => {
     if (
       isBusy ||
       submissionLockRef.current ||
       (!text.trim() && fileParts.length === 0)
     ) {
-      return
+      return false
     }
 
     submissionLockRef.current = true
@@ -209,6 +212,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
           type: 'file' as const,
           url: f.url,
           mediaType: f.mediaType,
+          filename: f.filename,
         })),
       ],
     })
@@ -217,6 +221,7 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
         submissionLockRef.current = false
       })
     setInput('')
+    return true
   }
   // 作用是把是否终断这个状态加到messages这个数组中去，
   // 交给messages组件渲染判断是否渲染点赞和分支功能

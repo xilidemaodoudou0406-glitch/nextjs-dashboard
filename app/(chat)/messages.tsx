@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WheelEvent } from 'react'
+import Image from 'next/image'
 import { GitBranch } from 'lucide-react'
 import Markdown from './markdown'
 import { MessageFeedback } from '@/app/components/message-feedback'
@@ -179,6 +180,24 @@ export default function Messages({
                     }
                 return <Markdown key={idx}>{part.text}</Markdown>
               }
+
+              if (
+                part.type === 'file' &&
+                part.mediaType.startsWith('image/')
+              ) {
+                return (
+                  <Image
+                    alt={part.filename ?? '用户上传的图片'}
+                    className="my-2 max-h-80 w-auto rounded-md object-contain"
+                    height={480}
+                    key={idx}
+                    src={part.url}
+                    unoptimized
+                    width={640}
+                  />
+                )
+              }
+
               return null
             })}
             {/* 只有ai完成回复的才显示点赞和分支 */}

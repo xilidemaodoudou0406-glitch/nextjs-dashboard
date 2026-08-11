@@ -42,6 +42,7 @@ export default async function ChatPage({
       id: string
       role: 'user' | 'assistant'
       content: string
+      parts: ChatMessage['parts']
       status: MessagePersistenceStatus
       created_at: Date
     }[]
@@ -50,6 +51,7 @@ export default async function ChatPage({
       message.id,
       message.role,
       message.content,
+      message.parts,
       message.status,
       message.created_at
     FROM messages AS message
@@ -67,7 +69,7 @@ export default async function ChatPage({
     metadata: {
       persistenceStatus: m.status,
     },
-    parts: [{ type: 'text' as const, text: m.content }],
+    parts: m.parts,
   }))
   
   return <Chat key={chatId} chatId={chatId} initialMessages={initialMessages} />

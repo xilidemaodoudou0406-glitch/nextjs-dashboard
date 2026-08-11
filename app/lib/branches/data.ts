@@ -19,6 +19,7 @@ type MessageRow = {
   id: string
   role: ChatMessage['role']
   content: string
+  parts: ChatMessage['parts']
   status: MessagePersistenceStatus
   created_at: Date
 }
@@ -40,7 +41,7 @@ function toChatMessage(row: MessageRow): ChatMessage {
     metadata: {
       persistenceStatus: row.status,
     },
-    parts: [{ type: 'text', text: row.content }],
+    parts: row.parts,
   }
 }
 
@@ -204,13 +205,16 @@ export async function createBranchOnFirstSubmit({
     if (!branch) return null
 
     const insertedMessages = await transaction<{ id: string }[]>`
-      INSERT INTO messages (id, chat_id, role, content, status)
+      INSERT INTO messages (id, chat_id, role, content, status, parts)
       VALUES (
         ${firstMessage.id}::uuid,
         ${branch.id}::uuid,
         'user',
         ${firstMessage.content},
-        'completed'
+        'completed',
+        ${JSON.stringify([
+          { type: 'text', text: firstMessage.content },
+        ])}::jsonb
       )
       ON CONFLICT (id) DO NOTHING
       RETURNING id
@@ -266,6 +270,7 @@ export async function getBranchConversation({
       anchor_id: string
       anchor_role: ChatMessage['role']
       anchor_content: string
+      anchor_parts: ChatMessage['parts']
       anchor_status: MessagePersistenceStatus
       anchor_created_at: Date
     })[]
@@ -279,6 +284,7 @@ export async function getBranchConversation({
       anchor.id AS anchor_id,
       anchor.role AS anchor_role,
       anchor.content AS anchor_content,
+      anchor.parts AS anchor_parts,
       anchor.status AS anchor_status,
       anchor.created_at AS anchor_created_at
     FROM chats AS branch
@@ -306,6 +312,7 @@ export async function getBranchConversation({
       message.id,
       message.role,
       message.content,
+      message.parts,
       message.status,
       message.created_at
     FROM messages AS message
@@ -336,6 +343,7 @@ export async function getBranchConversation({
       message.id,
       message.role,
       message.content,
+      message.parts,
       message.status,
       message.created_at
     FROM messages AS message
@@ -359,7 +367,7 @@ export async function getBranchConversation({
       metadata: {
         persistenceStatus: branchRow.anchor_status,
       },
-      parts: [{ type: 'text', text: branchRow.anchor_content }],
+      parts: branchRow.anchor_parts,
     },
     inheritedMessages: inheritedRows.map(toChatMessage),
     branchMessages: branchMessageRows.map(toChatMessage),

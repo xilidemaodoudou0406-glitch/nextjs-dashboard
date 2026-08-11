@@ -159,6 +159,9 @@ describe('POST /api/chat message persistence', () => {
 
     expect(userInsert?.values[0]).toBe(userMessageId)
     expect(userInsert?.text).toContain("'completed'")
+    expect(userInsert?.values).toContain(
+      JSON.stringify([{ type: 'text', text: '你好' }]),
+    )
   })
 
   it('accepts the first branch message when the creation transaction already persisted it', async () => {

@@ -60,6 +60,50 @@ describe('chatRequestSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  it('accepts uploaded public images and rejects browser-only blob URLs', () => {
+    const baseMessage = {
+      id: firstUserMessageId,
+      role: 'user',
+      parts: [{ type: 'text', text: '分析图片' }],
+    }
+    const validResult = chatRequestSchema.safeParse({
+      id: chatId,
+      messages: [
+        {
+          ...baseMessage,
+          parts: [
+            ...baseMessage.parts,
+            {
+              type: 'file',
+              mediaType: 'image/png',
+              filename: 'example.png',
+              url: 'https://example.public.blob.vercel-storage.com/example.png',
+            },
+          ],
+        },
+      ],
+    })
+    const blobUrlResult = chatRequestSchema.safeParse({
+      id: chatId,
+      messages: [
+        {
+          ...baseMessage,
+          parts: [
+            ...baseMessage.parts,
+            {
+              type: 'file',
+              mediaType: 'image/png',
+              url: 'blob:http://localhost/example',
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(validResult.success).toBe(true)
+    expect(blobUrlResult.success).toBe(false)
+  })
+
   it.each(['completed', 'interrupted'] as const)(
     'accepts the %s persistence status without mixing it with request status',
     (persistenceStatus) => {

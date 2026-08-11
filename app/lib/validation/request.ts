@@ -15,9 +15,22 @@ const textPartSchema = z
 const filePartSchema = z
   .object({
     type: z.literal('file'),
-    mediaType: z.string().min(1),
-    filename: z.string().optional(),
-    url: z.string().min(1),
+    mediaType: z.enum([
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/gif',
+    ]),
+    filename: z.string().max(255).optional(),
+    // 当前上传接口只返回 Vercel Blob 公网地址，拒绝 blob URL、相对路径和
+    // 客户端伪造的任意远程地址，避免把不可控资源交给模型提供方读取。
+    url: z.string().url().refine(
+      (value) =>
+        new URL(value).hostname.endsWith(
+          '.public.blob.vercel-storage.com',
+        ),
+      '图片必须来自配置的公网图片存储',
+    ),
   })
   .passthrough()
 

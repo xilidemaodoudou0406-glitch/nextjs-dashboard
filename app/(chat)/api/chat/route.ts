@@ -65,6 +65,7 @@ export async function POST(req: Request) {
 
     // 这步是为了AI SDK 的 UIMessage 格式转换成数据库能存的纯文本字符串
     const userText = getMessageText(lastMessage)
+    const userPartsJson = JSON.stringify(lastMessage.parts)
 
     // 4. 只查询当前用户拥有的 chat
     let ownedChat = await sql<
@@ -107,7 +108,8 @@ export async function POST(req: Request) {
         }
       } else {
         ownedChat = insertedChat
-        const title = await generateTitle(userText)
+        // 允许只发送图片；没有文字时也要得到可读的默认标题。
+        const title = await generateTitle(userText.trim() || '图片对话')
         await sql`
           UPDATE chats
           SET title = ${title}
@@ -130,8 +132,14 @@ export async function POST(req: Request) {
 
     // 5. INSERT ... SELECT 再次把消息写入限定在当前用户的对话中
     const insertedUserMessage = await sql<{ id: string }[]>`
-      INSERT INTO messages (id, chat_id, role, content, status)
-      SELECT ${lastMessage.id}::uuid, id, 'user', ${userText}, 'completed'
+      INSERT INTO messages (id, chat_id, role, content, status, parts)
+      SELECT
+        ${lastMessage.id}::uuid,
+        id,
+        'user',
+        ${userText},
+        'completed',
+        ${userPartsJson}::jsonb
       FROM chats
       WHERE id = ${chatId} AND user_id = ${user.id}
       ON CONFLICT (id) DO NOTHING
@@ -150,6 +158,7 @@ export async function POST(req: Request) {
           AND message.chat_id = ${chatId}
           AND message.role = 'user'
           AND message.content = ${userText}
+          AND message.parts = ${userPartsJson}::jsonb
           AND chat.user_id = ${user.id}
         LIMIT 1
       `
@@ -211,15 +220,17 @@ export async function POST(req: Request) {
 
         const persistenceStatus =
           getMessagePersistenceStatus(wasInterrupted)
+        const assistantPartsJson = JSON.stringify(responseMessage.parts)
 
         const insertedAssistantMessage = await sql<{ id: string }[]>`
-          INSERT INTO messages (id, chat_id, role, content, status)
+          INSERT INTO messages (id, chat_id, role, content, status, parts)
           SELECT
             ${assistantMessageId}::uuid,
             id,
             'assistant',
             ${assistantText},
-            ${persistenceStatus}
+            ${persistenceStatus},
+            ${assistantPartsJson}::jsonb
           FROM chats
           WHERE id = ${chatId} AND user_id = ${user.id}
           RETURNING id
@@ -234,4 +245,3 @@ export async function POST(req: Request) {
     return routeErrorResponse(error)
   }
 }
-

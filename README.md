@@ -38,6 +38,7 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 ### AI 聊天与工程边界
 
 - DeepSeek 流式回答、Markdown/GFM 和代码高亮；
+- 图片先上传到 Vercel Blob，再以公网 HTTPS URL 与文字组成同一条消息；
 - 用户消息、AI SDK 消息和数据库记录共用同一个 UUID；
 - 区分浏览器请求状态与 `completed / interrupted` 消息持久化状态；
 - 主动停止后保留并标记部分回答，失败后可重新生成；
@@ -89,6 +90,7 @@ chats.branch_from_message_id
 - Auth.js 5
 - PostgreSQL、postgres.js
 - Zod
+- Vercel Blob
 - Tailwind CSS
 - Vitest、Testing Library、Playwright
 
@@ -115,7 +117,12 @@ POSTGRES_URL=postgresql://user:password@localhost:5432/ai_chatbot
 AUTH_SECRET=至少32个字符的随机字符串
 AUTH_TRUST_HOST=true
 DEEPSEEK_API_KEY=你的API密钥
+BLOB_READ_WRITE_TOKEN=你的Vercel Blob读写令牌
 ```
+
+图片上传使用 Vercel Blob 服务端认证：浏览器只请求本项目的
+`/api/upload`，Blob 写入令牌不会暴露到客户端。当前 DeepSeek 文本模型本身
+不能理解图片；完整视觉问答需要把 AI provider 换成支持图片输入的模型。
 
 ### 3. 初始化数据库
 
