@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:backfill-memories": "node scripts/backfill-conversation-memories.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^2.0.51",

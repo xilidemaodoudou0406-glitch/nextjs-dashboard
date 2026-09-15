@@ -2,6 +2,11 @@
 import { streamText, generateText, convertToModelMessages } from 'ai'
 import { models } from '@/app/lib/ai/provider'
 import {
+  buildChatSystemPrompt,
+  buildModelContext,
+} from '@/app/lib/ai/context'
+import { saveConversationMemory } from '@/app/lib/ai/memory'
+import {
   getMessagePersistenceStatus,
   getMessageText,
   type ChatMessage,
@@ -17,7 +22,6 @@ import {
   chatRequestSchema,
   parseJsonRequest,
 } from '@/app/lib/validation/request'
-import { getBranchConversation } from '@/app/lib/branches/data'
 
 // ai生成标题函数
 async function generateTitle(firstMessage:string):Promise<string> {
@@ -168,27 +172,20 @@ export async function POST(req: Request) {
       }
     }
 
-    // 6. 组装真正交给模型的上下文。
-    // 分支客户端只提交最新用户消息；服务端依据 branchId 重新读取“主线截至锚点
-    // 的前缀 + 分支自身消息”。因此客户端无法把锚点之后的主消息或其他分支消息
-    // 塞进模型上下文。主对话暂时保留原协议，避免破坏当前图片 parts 的传递。
-    let modelContextMessages = messages
+    // 6. 上下文完全由服务端根据数据库重建。浏览器只负责发送最新消息：
+    // - 最近 16 条原文保证连续追问自然；
+    // - pgvector 最多召回 3 条较早且相关的记忆；
+    // - 分支查询只允许看到父对话锚点以前的内容和分支自身内容。
+    const { recentMessages, relevantMemories } = await buildModelContext({
+      userId: user.id,
+      chatId,
+      queryText: userText,
+    })
 
-    if (isBranchChat) {
-      const branchConversation = await getBranchConversation({
-        userId: user.id,
-        parentChatId: currentChat.parent_chat_id!,
-        branchId: chatId,
-      })
-
-      if (!branchConversation) {
-        throw resourceNotFoundError('分支不存在')
-      }
-
-      modelContextMessages = [
-        ...branchConversation.inheritedMessages,
-        ...branchConversation.branchMessages,
-      ]
+    if (recentMessages.length === 0) {
+      // 正常情况下刚保存的用户消息一定会被最近上下文查询命中。
+      // 空结果说明资源关系或数据库状态异常，不能退回信任客户端历史。
+      throw resourceNotFoundError('对话不存在')
     }
 
     // 7. 调用 AI
@@ -197,8 +194,8 @@ export async function POST(req: Request) {
     const assistantMessageId = crypto.randomUUID()
     const result = streamText({
       model: models[modelId],
-      system: '你是一个有帮助的 AI 助手。用中文回复。回复要简洁。',
-      messages: await convertToModelMessages(modelContextMessages),
+      system: buildChatSystemPrompt(relevantMemories),
+      messages: await convertToModelMessages(recentMessages),
       maxOutputTokens: 1000,
       abortSignal: req.signal,
     })
@@ -238,6 +235,23 @@ export async function POST(req: Request) {
 
         if (insertedAssistantMessage.length === 0) {
           throw resourceNotFoundError('对话不存在')
+        }
+
+        // 只有完整回答才成为长期记忆。向量服务是增强能力，它的临时失败
+        // 不应撤销已经成功保存的聊天消息，也不应让用户看到一次假失败。
+        if (persistenceStatus === 'completed') {
+          try {
+            await saveConversationMemory({
+              userId: user.id,
+              chatId,
+              userMessageId: lastMessage.id,
+              assistantMessageId,
+              userText,
+              assistantText,
+            })
+          } catch (error) {
+            console.error('保存对话向量记忆失败：', error)
+          }
         }
       },
     })

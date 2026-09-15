@@ -38,6 +38,9 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 ### AI 聊天与工程边界
 
 - DeepSeek 流式回答、Markdown/GFM 和代码高亮；
+- 主对话和分支都只从浏览器上传最新消息，历史上下文由服务端权威组装；
+- 使用“最近 16 条原文 + 最多 3 条 RAG 记忆”控制模型输入长度；
+- 使用百炼 `text-embedding-v4` 和 PostgreSQL pgvector 保存、检索长期记忆；
 - 图片先上传到 Vercel Blob，再以公网 HTTPS URL 与文字组成同一条消息；
 - 用户消息、AI SDK 消息和数据库记录共用同一个 UUID；
 - 区分浏览器请求状态与 `completed / interrupted` 消息持久化状态；
@@ -60,15 +63,22 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 
 ### 服务端权威上下文
 
-主对话沿用完整消息请求；分支请求只携带最新用户消息。服务端校验分支归属后查询：
+主对话和分支请求都只携带最新用户消息。服务端校验资源归属后查询：
 
 ```text
-主对话截至锚点的前缀
-+ 分支自己的历史消息
-+ 当前最新问题
+最近 16 条原始消息
++ 最多 3 条相关的较早向量记忆
 ```
 
+分支的最近消息和向量记忆都被限制在“父对话截至锚点 + 分支自身”范围内，
 客户端无法把锚点之后的主消息或其他分支消息注入模型上下文。
+
+### RAG 对话记忆
+
+每个正常完成的一问一答会生成一个 1024 维向量并写入
+`conversation_memories`。向量索引是可重建的派生数据，完整记录仍以
+`messages` 为准。Embedding 或检索临时失败时，聊天自动降级为最近上下文，
+不会丢失已经生成的回答。
 
 ### 最小数据关系
 
@@ -81,7 +91,7 @@ chats.branch_from_message_id
 
 数据库使用外键、成对检查、禁止自引用和锚点唯一约束维护关系；删除主对话会级联清理分支，删除分支不会影响主对话。
 
-更完整的实现说明见 [BRANCH_CONVERSATION_IMPLEMENTATION.md](./BRANCH_CONVERSATION_IMPLEMENTATION.md)。
+完整项目设计见 [PROJECT_DESIGN_DETAILS.md](./PROJECT_DESIGN_DETAILS.md)，分支功能的阶段化实现记录见 [BRANCH_CONVERSATION_IMPLEMENTATION.md](./BRANCH_CONVERSATION_IMPLEMENTATION.md)，RAG 的数据流、边界和运维方式见 [RAG_IMPLEMENTATION.md](./RAG_IMPLEMENTATION.md)。
 
 ## 技术栈
 
@@ -89,6 +99,7 @@ chats.branch_from_message_id
 - AI SDK 6、`@ai-sdk/react`
 - Auth.js 5
 - PostgreSQL、postgres.js
+- pgvector、阿里云百炼 `text-embedding-v4`
 - Zod
 - Vercel Blob
 - Tailwind CSS
@@ -117,6 +128,8 @@ POSTGRES_URL=postgresql://user:password@localhost:5432/ai_chatbot
 AUTH_SECRET=至少32个字符的随机字符串
 AUTH_TRUST_HOST=true
 DEEPSEEK_API_KEY=你的API密钥
+DASHSCOPE_API_KEY=你的百炼API密钥
+DASHSCOPE_BASE_URL=https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
 BLOB_READ_WRITE_TOKEN=你的Vercel Blob读写令牌
 ```
 
@@ -133,6 +146,13 @@ pnpm db:migrate
 ```
 
 迁移脚本会按文件名顺序执行 `migrations/*.sql`，并通过 `app_migrations` 记录已完成版本。重复运行会安全跳过已经执行的迁移。
+
+如果数据库中已经有旧聊天记录，可先预估数量再执行幂等回填：
+
+```bash
+pnpm db:backfill-memories -- --dry-run
+pnpm db:backfill-memories
+```
 
 ### 4. 启动开发服务器
 
@@ -155,7 +175,7 @@ pnpm test:e2e   # Playwright，需要可用的测试数据库
 
 GitHub Actions 会为 E2E 启动独立 PostgreSQL 服务，执行同一套迁移，再运行浏览器测试，避免依赖开发者已经准备好的远程数据库。
 
-当前验证基线（2026-08-11）：ESLint、TypeScript 和生产构建通过；Vitest 共 15 个测试文件、55 个用例通过；Playwright 共 2 个关键浏览器用例通过。
+当前验证基线（2026-09-13）：ESLint、TypeScript 和生产构建通过；Vitest 共 18 个测试文件、67 个用例通过；Playwright 共 2 个关键浏览器用例通过。
 
 ## 目录说明
 
@@ -168,9 +188,10 @@ app/lib/db                 统一数据库连接
 app/lib/validation         请求运行时校验
 migrations                 可从空数据库执行的版本化迁移
 scripts/migrate.mjs        迁移执行器
+scripts/backfill-conversation-memories.mjs  历史向量回填
 tests/e2e                  真实浏览器关键链路
 ```
 
 ## 功能边界
 
-第一版刻意不实现分支嵌套、一条消息多个分支、自动合并回主线、RAG 或复杂配额平台。项目重点是把上下文隔离、流式交互和异常恢复做成稳定且可验证的闭环。
+当前不实现分支嵌套、一条消息多个分支、自动合并回主线、自动摘要或复杂配额平台。RAG 已用于召回较早细节；最近原文继续负责连续追问，避免只依赖向量检索造成语境断裂。

@@ -22,13 +22,11 @@ type UIResponseOptions = {
 }
 
 const mocks = vi.hoisted(() => ({
-  branchConversation: null as null | {
-    inheritedMessages: unknown[]
-    branchMessages: unknown[]
-  },
+  buildChatSystemPrompt: vi.fn(() => '测试系统提示词'),
+  buildModelContext: vi.fn(),
   convertToModelMessages: vi.fn(async (messages: unknown[]) => messages),
-  getBranchConversation: vi.fn(),
   ownedParentChatId: null as string | null,
+  saveConversationMemory: vi.fn(async () => true),
   sqlCalls: [] as SqlCall[],
   uiResponseOptions: undefined as UIResponseOptions | undefined,
   userMessageAlreadyExists: false,
@@ -75,6 +73,15 @@ vi.mock('@/app/lib/env', () => ({
   },
 }))
 
+vi.mock('@/app/lib/ai/context', () => ({
+  buildChatSystemPrompt: mocks.buildChatSystemPrompt,
+  buildModelContext: mocks.buildModelContext,
+}))
+
+vi.mock('@/app/lib/ai/memory', () => ({
+  saveConversationMemory: mocks.saveConversationMemory,
+}))
+
 vi.mock('@/app/lib/auth/require-user', () => ({
   requireUser: vi.fn(async () => ({
     id: 'adad85e4-e660-4e9b-a7f5-b19848230d33',
@@ -87,10 +94,6 @@ vi.mock('@/app/lib/ai/provider', () => ({
     'deepseek-chat': {},
     'deepseek-reasoner': {},
   },
-}))
-
-vi.mock('@/app/lib/branches/data', () => ({
-  getBranchConversation: mocks.getBranchConversation,
 }))
 
 vi.mock('ai', () => ({
@@ -142,11 +145,19 @@ describe('POST /api/chat message persistence', () => {
     mocks.userMessageAlreadyExists = false
     mocks.ownedParentChatId = null
     mocks.convertToModelMessages.mockClear()
-    mocks.getBranchConversation.mockReset()
-    mocks.getBranchConversation.mockImplementation(async () =>
-      mocks.branchConversation,
-    )
-    mocks.branchConversation = null
+    mocks.buildChatSystemPrompt.mockClear()
+    mocks.buildModelContext.mockReset()
+    mocks.buildModelContext.mockResolvedValue({
+      recentMessages: [
+        {
+          id: userMessageId,
+          role: 'user',
+          parts: [{ type: 'text', text: '你好' }],
+        },
+      ],
+      relevantMemories: [],
+    })
+    mocks.saveConversationMemory.mockClear()
   })
 
   it('uses one ID for the user UI message and database record', async () => {
@@ -190,10 +201,10 @@ describe('POST /api/chat message persistence', () => {
       parts: [{ type: 'text', text: '你好' }],
     }
     mocks.ownedParentChatId = parentChatId
-    mocks.branchConversation = {
-      inheritedMessages: [inheritedMessage],
-      branchMessages: [persistedBranchMessage],
-    }
+    mocks.buildModelContext.mockResolvedValue({
+      recentMessages: [inheritedMessage, persistedBranchMessage],
+      relevantMemories: [],
+    })
 
     const response = await startChatRequest({
       chatMode: 'branch',
@@ -207,10 +218,10 @@ describe('POST /api/chat message persistence', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(mocks.getBranchConversation).toHaveBeenCalledWith({
+    expect(mocks.buildModelContext).toHaveBeenCalledWith({
       userId: 'adad85e4-e660-4e9b-a7f5-b19848230d33',
-      parentChatId,
-      branchId: chatId,
+      chatId,
+      queryText: '你好',
     })
     expect(mocks.convertToModelMessages).toHaveBeenCalledWith([
       inheritedMessage,
@@ -249,6 +260,19 @@ describe('POST /api/chat message persistence', () => {
 
       expect(assistantInsert.values[0]).toBe(assistantMessageId)
       expect(assistantInsert.values[2]).toBe(expectedStatus)
+
+      if (expectedStatus === 'completed') {
+        expect(mocks.saveConversationMemory).toHaveBeenCalledWith({
+          userId: 'adad85e4-e660-4e9b-a7f5-b19848230d33',
+          chatId,
+          userMessageId,
+          assistantMessageId,
+          userText: '你好',
+          assistantText: '回答内容',
+        })
+      } else {
+        expect(mocks.saveConversationMemory).not.toHaveBeenCalled()
+      }
     },
   )
 

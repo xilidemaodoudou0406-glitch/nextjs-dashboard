@@ -69,15 +69,18 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
     regenerate,
   } = useChat<ChatMessage>({
     id: chatId,
-    // 这个初始化历史消息每次发消息都会传给后端（前提是触发这个之后）
-
-    // 这里目前先了解这么多 还有usechat内部原理没有了解
-    // 后面需要了解这个messages 是怎么被usechat维护的
-    // 此处注意对比有初始化历史消息和没有这两种情况下，发送消息的不同
-    messages: initialMessages, // 这个是传回来的历史消息
+    // useChat 仍保留完整消息用于页面渲染，但网络请求只上传最新消息。
+    // 历史上下文和 RAG 记忆由服务端根据 chatId 权威组装。
+    messages: initialMessages,
     transport: new DefaultChatTransport({ 
       api: '/api/chat',
-      body: { id: chatId, chatMode: 'main' },
+      body: { id: chatId, chatMode: 'main', modelId },
+      prepareSendMessagesRequest: ({ body, messages }) => ({
+        body: {
+          ...body,
+          messages: messages.slice(-1),
+        },
+      }),
     }),
     // ai流式响应全部结束的时候触发onfinish
     onFinish:({ message, isAbort, isDisconnect, isError, finishReason }) => {
@@ -115,10 +118,6 @@ export default function Chat({ chatId, initialMessages = [] }: Props) {
     if (!isBusy) submissionLockRef.current = false
   }, [isBusy])
   // 此处我有一个疑问：这边是把历史消息和新消息打包一起发给后端，
-
-  // 上面那个问题：区别只在谁来拼上下文。你现在是客户端拼，另一种是服务端拼。客户端拼的好处是不用每次额外查一次数据库；服务端拼的好处是客户端传的数据更少、更不容易被篡改上下文。两种都是常见做法。
-  // 如果设计成只发送新消息到后端（不是这个接口，这个接口是掉模型api的）
-  // 然后后端在掉数据库 将消息整合到一起，再去访问模型api这两者有何区别？
   
   // 当首次发出消息后,如果当前 URL 不是 /chat/[id],跳转过去
 

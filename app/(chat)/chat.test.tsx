@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(),
   search: '',
   sendMessage: vi.fn(),
+  transport: vi.fn(),
   useChat: vi.fn(),
 }))
 
@@ -17,7 +18,11 @@ vi.mock('@ai-sdk/react', () => ({
 }))
 
 vi.mock('ai', () => ({
-  DefaultChatTransport: class {},
+  DefaultChatTransport: class {
+    constructor(options: unknown) {
+      mocks.transport(options)
+    }
+  },
 }))
 
 vi.mock('next/navigation', () => ({
@@ -95,6 +100,38 @@ describe('Chat message identity', () => {
     expect(mocks.sendMessage.mock.calls[0][0]).not.toHaveProperty(
       'messageId',
     )
+  })
+
+  it('keeps full UI history locally but only uploads the latest message', () => {
+    render(
+      <Chat chatId="3d60516d-3443-4faa-862c-6c96f3eafa19" />,
+    )
+
+    const transportOptions = mocks.transport.mock.calls[0][0]
+    const oldMessage = {
+      id: '535823cd-d4d2-4341-bb7b-37bbef72c1e7',
+      role: 'assistant',
+      parts: [{ type: 'text', text: '旧回答' }],
+    }
+    const latestMessage = {
+      id: '065c30b8-a52a-48e1-87bd-b1e2801a88f9',
+      role: 'user',
+      parts: [{ type: 'text', text: '最新问题' }],
+    }
+
+    expect(
+      transportOptions.prepareSendMessagesRequest({
+        body: transportOptions.body,
+        messages: [oldMessage, latestMessage],
+      }),
+    ).toEqual({
+      body: {
+        id: '3d60516d-3443-4faa-862c-6c96f3eafa19',
+        chatMode: 'main',
+        modelId: 'deepseek-chat',
+        messages: [latestMessage],
+      },
+    })
   })
 
   it('blocks rapid duplicate submissions at the shared chat boundary', () => {
