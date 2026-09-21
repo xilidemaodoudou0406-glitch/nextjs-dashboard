@@ -142,6 +142,9 @@ try {
               source_user_message_id,
               source_assistant_message_id,
               content,
+              retrieval_text,
+              memory_type,
+              importance,
               embedding,
               embedding_model
             )
@@ -151,6 +154,9 @@ try {
               ${row.user_message_id}::uuid,
               ${row.assistant_message_id}::uuid,
               ${contents[index]},
+              ${contents[index]},
+              'discussion',
+              0.4,
               ${serializeVector(embeddings[index])}::vector,
               ${EMBEDDING_MODEL_ID}
             )

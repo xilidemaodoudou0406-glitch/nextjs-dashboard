@@ -39,8 +39,9 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 
 - DeepSeek 流式回答、Markdown/GFM 和代码高亮；
 - 主对话和分支都只从浏览器上传最新消息，历史上下文由服务端权威组装；
-- 使用“最近 16 条原文 + 最多 3 条 RAG 记忆”控制模型输入长度；
-- 使用百炼 `text-embedding-v4` 和 PostgreSQL pgvector 保存、检索长期记忆；
+- 使用“最近 16 条原文上限 + Token 预算 + 最多 3 条 RAG 记忆”控制模型输入长度；
+- 使用百炼 `text-embedding-v4` 和 PostgreSQL pgvector 保存、检索结构化长期记忆；
+- 对上下文依赖问题进行条件式查询改写，结合 pgvector 语义召回与基于 pg_trgm、精确技术词匹配的词法召回，并通过 RRF 融合候选；
 - 图片先上传到 Vercel Blob，再以公网 HTTPS URL 与文字组成同一条消息；
 - 用户消息、AI SDK 消息和数据库记录共用同一个 UUID；
 - 区分浏览器请求状态与 `completed / interrupted` 消息持久化状态；
@@ -66,19 +67,20 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 主对话和分支请求都只携带最新用户消息。服务端校验资源归属后查询：
 
 ```text
-最近 16 条原始消息
-+ 最多 3 条相关的较早向量记忆
+Token 预算内的最近原始消息（最多 16 条）
++ 最多 3 条经混合检索筛选的较早记忆
 ```
 
-分支的最近消息和向量记忆都被限制在“父对话截至锚点 + 分支自身”范围内，
+分支的最近消息和检索记忆都被限制在“父对话截至锚点 + 分支自身”范围内，
 客户端无法把锚点之后的主消息或其他分支消息注入模型上下文。
 
 ### RAG 对话记忆
 
-每个正常完成的一问一答会生成一个 1024 维向量并写入
-`conversation_memories`。向量索引是可重建的派生数据，完整记录仍以
-`messages` 为准。Embedding 或检索临时失败时，聊天自动降级为最近上下文，
-不会丢失已经生成的回答。
+正常完成的问答先经过长期记忆资格判断，寒暄和无信息量追问不会建立索引；
+有效记忆会被提取为自包含的检索文本，再生成 1024 维向量写入
+`conversation_memories`。检索同时执行 pgvector 语义召回和 PostgreSQL
+关键词召回，通过 RRF 融合后再按阈值、来源消息及 Token 预算筛选。
+记忆索引仍是可重建的派生数据，完整记录以 `messages` 为准。当前每轮最多抽取一条记忆；具体边界见实现记录。
 
 ### 最小数据关系
 
@@ -91,15 +93,15 @@ chats.branch_from_message_id
 
 数据库使用外键、成对检查、禁止自引用和锚点唯一约束维护关系；删除主对话会级联清理分支，删除分支不会影响主对话。
 
-完整项目设计见 [PROJECT_DESIGN_DETAILS.md](./PROJECT_DESIGN_DETAILS.md)，分支功能的阶段化实现记录见 [BRANCH_CONVERSATION_IMPLEMENTATION.md](./BRANCH_CONVERSATION_IMPLEMENTATION.md)，RAG 的数据流、边界和运维方式见 [RAG_IMPLEMENTATION.md](./RAG_IMPLEMENTATION.md)。
+完整项目设计见 [PROJECT_DESIGN_DETAILS.md](./PROJECT_DESIGN_DETAILS.md)，分支功能的阶段化实现记录见 [BRANCH_CONVERSATION_IMPLEMENTATION.md](./BRANCH_CONVERSATION_IMPLEMENTATION.md)，RAG 的数据流、边界和运维方式见 [RAG_IMPLEMENTATION.md](./RAG_IMPLEMENTATION.md)，离线指标与数据集规范见 [RAG_EVALUATION.md](./RAG_EVALUATION.md)。
 
 ## 技术栈
 
 - Next.js 16、React 19、TypeScript
 - AI SDK 6、`@ai-sdk/react`
 - Auth.js 5
-- PostgreSQL、postgres.js
-- pgvector、阿里云百炼 `text-embedding-v4`
+- PostgreSQL、postgres.js、pgvector、pg_trgm
+- 阿里云百炼 `text-embedding-v4`
 - Zod
 - Vercel Blob
 - Tailwind CSS
@@ -175,7 +177,7 @@ pnpm test:e2e   # Playwright，需要可用的测试数据库
 
 GitHub Actions 会为 E2E 启动独立 PostgreSQL 服务，执行同一套迁移，再运行浏览器测试，避免依赖开发者已经准备好的远程数据库。
 
-当前验证基线（2026-09-13）：ESLint、TypeScript 和生产构建通过；Vitest 共 18 个测试文件、67 个用例通过；Playwright 共 2 个关键浏览器用例通过。
+当前验证基线（2026-09-21）：ESLint、TypeScript 和生产构建通过；Vitest 共 21 个测试文件、77 个用例通过。本次 RAG 改动未重新运行 Playwright；此前 2 个关键浏览器用例通过。
 
 ## 目录说明
 

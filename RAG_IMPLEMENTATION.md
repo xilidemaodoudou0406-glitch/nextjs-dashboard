@@ -1,185 +1,59 @@
 # RAG 对话记忆实现记录
 
-本文记录本项目从“每次上传并发送全部历史”改造成“最近上下文 + RAG 长期记忆”的设计、数据边界、运维命令和验证方法。
+本文描述当前代码中的对话记忆入库、检索、分支隔离和运行边界。完整聊天记录以 `messages` 为准，`conversation_memories` 是可重建的检索索引；它不是 PDF 或网页知识库。
 
-## 改造目标
-
-改造前，主对话由浏览器把完整 `messages` 数组提交给 `/api/chat`，服务端再把完整数组交给模型。历史增长后会同时增加浏览器请求体、模型输入 Token、延迟和费用。
-
-改造后遵守以下原则：
-
-1. 浏览器只提交最新一条消息；
-2. 完整消息仍保存在 `messages`，用于历史展示和审计；
-3. 服务端从数据库读取最近 16 条原文；
-4. 服务端最多检索 5 条候选记忆，过滤后最多注入 3 条；
-5. 主对话只读取自身，分支只读取“父对话截至锚点 + 分支自身”；
-6. Embedding 或向量检索失败时降级为最近上下文，不中断正常聊天；
-7. 只有正常完成的文字问答才写入长期记忆。
-
-## 最终数据流
+## 数据流
 
 ```text
-浏览器 useChat（保留完整 UI 消息）
-        │
-        │ POST /api/chat，仅最新用户消息
-        ▼
-认证、校验资源归属、幂等保存用户消息
-        │
-        ├──────────────┐
-        ▼              ▼
-读取最近 16 条      当前问题生成 1024 维向量
-原始消息              │
-        │              ▼
-        │         pgvector 检索候选记忆
-        │              │
-        └──────┬───────┘
-               ▼
-     去重、相关度过滤、最多 3 条(一条指的是用户+ai的一轮问答)
-               │
-               ▼
-   系统提示词 + 历史参考 + 最近消息
-               │
-               ▼
-        DeepSeek 流式生成回答
-               │
-               ▼
-       保存完整 assistant 消息
-               │
-               ▼
- 一问一答生成向量并写入 conversation_memories
+浏览器只提交最新用户消息
+  → 服务端校验用户与 chat 归属
+  → 读取最近消息（最多 16 条）
+  → 需要消解指代时改写检索查询
+  → pgvector 语义召回 + pg_trgm/精确技术词词法召回
+  → RRF 融合、相关度过滤、去重、分支内事实覆盖
+  → 注入最多 3 条较早记忆，与最近消息一起生成回答
+  → 保存完整 assistant 消息
+  → 仅对 completed 问答尝试提取并保存长期记忆
 ```
 
-## 数据库迁移
+查询改写只影响检索，不替换用户原问题。普通独立问题不调用改写模型，并行读取最近消息和两路候选；需要改写的问题先读取最近消息，再并行执行两路检索。
 
-迁移文件：`migrations/0004_add_conversation_memories.sql`
+## 入库与结构化记忆
 
-迁移会启用 `vector` 扩展，并创建 `conversation_memories`。一条记忆对应一条完整的 user/assistant 问答，核心字段包括：
+`app/lib/ai/memory-extractor.ts` 先过滤“你好”“谢谢”“继续”等明显低价值轮次，再让模型判断一轮完整问答是否值得保存。每轮最多抽取 **一条** 自包含记忆，包含 `retrievalText`、`memoryType`、`memoryKey`、`keywords` 和 `importance`。这属于对话记忆抽取，不是对长文档做多 Chunk 切分。抽取失败时回退为低权重 `discussion` 记忆；模型判断不值得保存时则不建索引。
 
-- `user_id`：检索租户边界；
-- `chat_id`：主对话或分支范围；
-- `source_user_message_id`：来源用户消息；
-- `source_assistant_message_id`：来源助手消息，同时作为幂等唯一键；
-- `content`：注入模型的可读记忆文本；
-- `embedding VECTOR(1024)`：语义向量；
-- `embedding_model`：当前固定为 `text-embedding-v4`。
+`app/lib/ai/memory.ts` 将完整问答保存为 `content`，供召回后作为历史参考；只对精简的 `retrievalText` 生成 `text-embedding-v4` 的 1024 维向量。插入时再次在 SQL 中验证用户、chat、消息角色和两条消息的 `completed` 状态，并以来源 assistant 消息 ID 防止重复入库。`interrupted` 回答保留为聊天记录，但不建长期记忆。记忆写入失败不会撤销已经保存的聊天消息。
 
-`messages` 是事实源，`conversation_memories` 是派生索引。换模型或损坏向量时，可以清空记忆表并从原始消息重新回填。
+同一 chat 内，新的非空 `memoryKey` 会将旧的同键记忆标记 `invalidated_at` 并记录 `superseded_by`；分支不会直接修改父对话的记忆。检索组装时，如果当前分支有同键候选，会排除继承来的父对话同键候选。
 
-## Embedding 配置
+## 检索与上下文组装
 
-服务端需要以下环境变量：
+`app/lib/ai/context.ts` 限制最近消息最多 16 条，每路检索最多取 20 条候选，最终最多注入 3 条记忆。`app/lib/ai/retrieval.ts` 以近似 Token 预算筛选最近消息和记忆：分别为 6000 和 1600。该估算不是模型 tokenizer，也不是严格的请求总 Token 上限；最新消息会保留。
 
-```env
-DASHSCOPE_API_KEY=你的百炼API密钥
-DASHSCOPE_BASE_URL=https://你的WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-```
+- **条件式查询改写**：包含“它”“这个”“刚才”等指代词，或非常短的问句时，使用最近最多 6 条消息改写为独立检索查询；失败则使用原问题。
+- **语义通道**：将检索查询 Embedding，按 pgvector 余弦距离排序。
+- **词法通道**：使用 `pg_trgm` 的字符相似度，并对查询中的错误码、版本号、函数名等 ASCII 技术实体进行精确子串命中加权。这是同一条词法通道内的两个评分信号，不是 BM25。
+- **融合与筛选**：RRF 按两路候选名次融合，不直接相加异构分数；随后按各通道阈值、最近消息来源去重、`memoryKey` 覆盖规则和记忆预算筛选。
 
-真实 Key 只放在 `.env.local` 或部署平台的服务端环境变量中，不能使用 `NEXT_PUBLIC_` 前缀。
+Embedding 服务或任一检索通道失败时，其他通道仍可工作；两路都失败时使用最近原文继续回答。历史记忆作为引用数据注入系统提示词，不被视为新的用户指令。
 
-相关代码：
+## 分支可见范围
 
-- `app/lib/ai/provider.ts`：固定模型 ID 和 1024 维；
-- `app/lib/ai/embedding.ts`：统一调用 `embed()`，并校验返回维度；
-- `app/lib/ai/memory.ts`：记忆格式化、保存和范围化检索；
-- `app/lib/ai/context.ts`：最近消息、检索去重、阈值和系统提示词。
+项目只支持主对话下的一层分支，不支持分支嵌套。最近消息和两路记忆检索都先以 `user_id`、当前 chat 和分支锚点限制候选：主对话只读自身；分支只读自身及父对话锚点之前的内容。锚点后的主线消息、兄弟分支和其他用户的数据不能进入候选。`migrations/0005_improve_rag_pipeline.sql` 为消息增加全局 `sequence_no`，以稳定顺序判断锚点前后。
 
-## 检索参数
+## 数据库与部署
 
-当前常量位于 `app/lib/ai/context.ts`：
+- `migrations/0004_add_conversation_memories.sql`：启用 pgvector，建立记忆表。
+- `migrations/0005_improve_rag_pipeline.sql`：增加消息顺序、结构化记忆及失效字段，并启用 `pg_trgm` 和相关索引。
+- `app/lib/ai/provider.ts`、`embedding.ts`：配置和校验 1024 维 Embedding。
+- `app/lib/ai/context.ts`、`memory.ts`、`retrieval.ts`、`query-rewrite.ts`：上下文组装和检索。
 
-```text
-RECENT_MESSAGE_LIMIT = 16
-RETRIEVAL_CANDIDATE_LIMIT = 5
-RETRIEVAL_RESULT_LIMIT = 3
-MEMORY_SIMILARITY_THRESHOLD = 0.6
-```
+服务端配置 `POSTGRES_URL`、`DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`，以及聊天所需的 `DEEPSEEK_API_KEY`。密钥只放在 `.env.local` 或部署平台服务端配置，不使用 `NEXT_PUBLIC_` 前缀。新环境先执行 `pnpm db:migrate`，再运行 `pnpm check`。数据库必须能启用 `vector` 和 `pg_trgm` 扩展。
 
-阈值 `0.6` 是初始值，应使用真实问题集评估后调整。低于阈值的候选不会强行注入；来源消息已在最近 16 条中的记忆也会去重。
+有旧消息时可先运行 `pnpm db:backfill-memories -- --dry-run`，再运行 `pnpm db:backfill-memories`。该回填脚本会为历史完整问答建立兼容索引，但使用完整问答作为 `retrieval_text`、类型为低权重 `discussion`，**不会**像新请求一样执行结构化抽取；若需统一历史质量，应另做受控重建。回填会调用 Embedding 服务，可能产生费用。
 
-## 分支隔离
+## 验证与边界
 
-分支查询不会复用主对话的无界结果。最近消息和向量记忆都遵守：
+单元测试覆盖清洗与抽取回退、预算、RRF、上下文筛选和评估指标。`/api/chat` 在非生产环境输出不含用户原文的检索 Trace，便于追踪候选 ID、分数、耗时和降级原因。离线指标及数据集规范见 [RAG_EVALUATION.md](./RAG_EVALUATION.md)；目前没有可用于宣称召回率提升的真实对照实验结果。
 
-```text
-父对话中 created_at/id 不晚于锚点的内容
-+ 当前 branchId 自己的内容
-```
-
-锚点之后的主对话、其他分支和其他用户的数据均不会进入候选集合。所有 SQL 同时校验 `user_id`，不能只信任客户端传入的 `chatId`。
-
-## 写入与失败降级
-
-助手消息完成并成功入库后，`/api/chat` 才尝试生成记忆。以下情况不写记忆：
-
-- 用户主动中断的回答；
-- 模型错误产生的部分文本；
-- 用户或助手没有可索引文字；
-- 数据库角色、归属或状态校验失败。
-
-保存记忆失败只记录服务端错误，不撤销聊天消息。检索失败则返回空记忆数组，模型继续使用最近 16 条消息回答。
-
-## 历史数据回填
-
-脚本：`scripts/backfill-conversation-memories.mjs`
-
-只统计、不调用 Embedding、不写数据库：
-
-```bash
-pnpm db:backfill-memories -- --dry-run
-```
-
-正式回填：
-
-```bash
-pnpm db:backfill-memories
-```
-
-脚本每批处理 10 条相邻且完整的 user/assistant 问答，并通过 `ON CONFLICT DO NOTHING` 支持安全重跑。
-
-## 部署步骤
-
-新环境应按顺序执行：
-
-```text
-1. 配置 POSTGRES_URL、DASHSCOPE_API_KEY、DASHSCOPE_BASE_URL
-2. 执行 pnpm db:migrate
-3. 如有旧消息，先 dry-run 再执行 db:backfill-memories
-4. 执行 pnpm check
-5. 部署应用
-```
-
-数据库必须支持 pgvector。如果 `CREATE EXTENSION vector` 失败，应先在数据库服务商控制台启用扩展，不能绕过迁移创建不兼容的普通数组字段。
-
-## 验证清单
-
-- 浏览器网络面板中 `/api/chat` 请求只包含最新消息；
-- 新问题可以正常流式回答；
-- 正常回答后记忆表增加一行；
-- 中断回答后记忆表不增加；
-- 对较早事实提问时可以召回相关记忆；
-- 无关问题不会强制加入低相似度记忆；
-- 用户 A 无法检索用户 B 的记忆；
-- 分支无法检索锚点之后的主对话内容；
-- Embedding 服务不可用时仍能依靠最近消息回答。
-
-## 当前边界与后续演进
-
-当前使用“最近原文 + RAG 记忆”，尚未自动生成对话摘要。这样可以先解决绝大部分长上下文问题，并避免单一主对话摘要把锚点之后的信息泄露给旧分支。
-
-如果未来需要摘要，应采用带截止消息 ID 的版本化摘要；分支只能选择截止位置不晚于锚点的摘要快照。不要只在 `chats` 上保存一个不断覆盖的摘要后直接给所有分支使用。
-
-当单个检索范围达到大量记忆、精确扫描成为瓶颈后，再基于真实查询计划评估 HNSW 索引。早期数据量较小时，按用户和对话过滤后的精确余弦搜索更容易验证正确性。
-
-
-
-
-
-## 几个模块
-
-![e71ed054-f1b9-4e09-aa54-2eb64f32f231](file:///C:/Users/15421/Pictures/Typedown/e71ed054-f1b9-4e09-aa54-2eb64f32f231.png)
-
-
-
-## 什么是`pgvector`
-
-![ce5adcad-dbcd-4e26-9671-c5774e252be6](file:///C:/Users/15421/Pictures/Typedown/ce5adcad-dbcd-4e26-9671-c5774e252be6.png)
+当前每轮最多一条记忆，没有多条原子事实拆分、文档切片、BM25、独立 Reranker、递归祖先分支或自动对话摘要。数据量增长后，应结合真实查询计划和评测结果决定是否引入 HNSW、BM25 或 Reranker，而不是预设它们一定更好。

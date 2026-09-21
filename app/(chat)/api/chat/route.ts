@@ -176,11 +176,28 @@ export async function POST(req: Request) {
     // - 最近 16 条原文保证连续追问自然；
     // - pgvector 最多召回 3 条较早且相关的记忆；
     // - 分支查询只允许看到父对话锚点以前的内容和分支自身内容。
-    const { recentMessages, relevantMemories } = await buildModelContext({
+    const {
+      recentMessages,
+      relevantMemories,
+      retrievalTrace,
+    } = await buildModelContext({
       userId: user.id,
       chatId,
       queryText: userText,
     })
+
+    if (process.env.NODE_ENV !== 'production' && retrievalTrace) {
+      // 不记录用户原文，只暴露候选 ID、耗时和降级原因供本地调试。
+      console.info('RAG retrieval trace', {
+        chatId,
+        wasRewritten: retrievalTrace.wasRewritten,
+        denseCandidates: retrievalTrace.denseCandidates,
+        keywordCandidates: retrievalTrace.keywordCandidates,
+        selectedMemoryIds: retrievalTrace.selectedMemoryIds,
+        fallbackReasons: retrievalTrace.fallbackReasons,
+        latencyMs: retrievalTrace.latencyMs,
+      })
+    }
 
     if (recentMessages.length === 0) {
       // 正常情况下刚保存的用户消息一定会被最近上下文查询命中。
