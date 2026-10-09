@@ -43,7 +43,7 @@ describe('memory extraction guard', () => {
         shouldStore: true,
         retrievalText: '项目数据库最终选择 PostgreSQL',
         memoryType: 'decision',
-        memoryKey: ' project.database ',
+        shouldTrackChanges: true,
         keywords: ['PostgreSQL', 'postgresql', ' pgvector '],
         importance: 0.9,
       },
@@ -57,7 +57,7 @@ describe('memory extraction guard', () => {
     ).resolves.toEqual({
       retrievalText: '项目数据库最终选择 PostgreSQL',
       memoryType: 'decision',
-      memoryKey: 'project.database',
+      shouldTrackChanges: true,
       keywords: ['postgresql', 'pgvector'],
       importance: 0.9,
     })

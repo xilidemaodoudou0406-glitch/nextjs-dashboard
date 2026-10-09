@@ -5,8 +5,8 @@ export const RRF_RANK_CONSTANT = 60
 export const RECENT_CONTEXT_TOKEN_BUDGET = 6_000
 export const MEMORY_CONTEXT_TOKEN_BUDGET = 1_600
 
-/** dense 表示向量语义召回，keyword 表示关键词/字符相似度召回。 */
-export type RetrievalChannel = 'dense' | 'keyword'
+/** dense 表示向量语义召回，bm25 表示基于词频和文档频率的词法召回。 */
+export type RetrievalChannel = 'dense' | 'bm25'
 
 export type RetrievalCandidateTrace = {
   id: string
@@ -19,14 +19,14 @@ export type RetrievalTrace = {
   retrievalQuery: string
   wasRewritten: boolean
   denseCandidates: RetrievalCandidateTrace[]
-  keywordCandidates: RetrievalCandidateTrace[]
+  bm25Candidates: RetrievalCandidateTrace[]
   selectedMemoryIds: string[]
   fallbackReasons: string[]
   latencyMs: {
     recentMessages: number
     rewrite: number
     dense: number
-    keyword: number
+    bm25: number
     total: number
   }
 }
@@ -129,25 +129,17 @@ export function shouldRewriteRetrievalQuery(query: string): boolean {
   return hasReference || isVeryShortQuestion
 }
 
-/**
- * 关键词通道优先补足向量检索不擅长的错误码、版本号、函数名和专有名词。
- * 长中文自然语言仍交给 dense retrieval，避免把整句话当成一个精确词。
- */
-export function extractKeywordTerms(query: string): string[] {
-  const matches = query.match(/[A-Za-z0-9_./:@-]{2,}/g) ?? []
-  return [...new Set(matches.map((value) => value.toLowerCase()))].slice(0, 12)
-}
-
+// RRF融合
 export function fuseConversationMemoryResults({
   dense,
-  keyword,
+  bm25,
   rankConstant = RRF_RANK_CONSTANT,
 }: {
   dense: ConversationMemory[]
-  keyword: ConversationMemory[]
+  bm25: ConversationMemory[]
   rankConstant?: number
 }): ConversationMemory[] {
-  // RRF 只使用候选的“排名”，不直接比较余弦分数和关键词分数。
+  // RRF 只使用候选的“排名”，不直接比较余弦相似度和 BM25 分数。
   // 这样能够规避两种分数取值范围不同、难以手工设置权重的问题。
   const fused = new Map<
     string,
@@ -173,8 +165,7 @@ export function fuseConversationMemoryResults({
           ...existing.memory,
           denseSimilarity:
             existing.memory.denseSimilarity ?? memory.denseSimilarity,
-          keywordSimilarity:
-            existing.memory.keywordSimilarity ?? memory.keywordSimilarity,
+          bm25Score: existing.memory.bm25Score ?? memory.bm25Score,
         }
         return
       }
@@ -188,7 +179,7 @@ export function fuseConversationMemoryResults({
   }
 
   addResults(dense, 'dense')
-  addResults(keyword, 'keyword')
+  addResults(bm25, 'bm25')
 
   return [...fused.values()]
     .sort((left, right) => {

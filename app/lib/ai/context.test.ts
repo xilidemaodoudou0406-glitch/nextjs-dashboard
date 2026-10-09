@@ -7,7 +7,7 @@ vi.mock('@/app/lib/db/client', () => ({
 
 vi.mock('./memory', () => ({
   searchConversationMemories: vi.fn(),
-  searchConversationMemoriesByKeyword: vi.fn(),
+  searchConversationMemoriesByBm25: vi.fn(),
 }))
 
 import type { ChatMessage } from './message'
@@ -42,7 +42,7 @@ function memory({
     content: `记忆 ${id}`,
     similarity,
     denseSimilarity: similarity,
-    keywordSimilarity: null,
+    bm25Score: null,
     retrievalScore: similarity,
     retrievalChannels: ['dense'],
     retrievalText: `检索文本 ${id}`,
@@ -77,6 +77,20 @@ describe('RAG context selection', () => {
       'second',
       'third',
     ])
+  })
+
+  it('keeps a positive BM25 candidate without requiring dense similarity', () => {
+    const bm25Memory = memory({ id: 'bm25-only', similarity: 0 })
+    bm25Memory.denseSimilarity = null
+    bm25Memory.bm25Score = 2.4
+    bm25Memory.retrievalChannels = ['bm25']
+
+    const selected = selectRelevantMemories({
+      memories: [bm25Memory],
+      recentMessages: [],
+    })
+
+    expect(selected.map(({ id }) => id)).toEqual(['bm25-only'])
   })
 
   it('returns the compact base prompt when no memory was found', () => {

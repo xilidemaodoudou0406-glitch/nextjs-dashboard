@@ -192,7 +192,7 @@ export async function POST(req: Request) {
         chatId,
         wasRewritten: retrievalTrace.wasRewritten,
         denseCandidates: retrievalTrace.denseCandidates,
-        keywordCandidates: retrievalTrace.keywordCandidates,
+        bm25Candidates: retrievalTrace.bm25Candidates,
         selectedMemoryIds: retrievalTrace.selectedMemoryIds,
         fallbackReasons: retrievalTrace.fallbackReasons,
         latencyMs: retrievalTrace.latencyMs,
@@ -267,7 +267,7 @@ export async function POST(req: Request) {
               assistantText,
             })
           } catch (error) {
-            console.error('保存对话向量记忆失败：', error)
+            console.error('保存对话长期记忆失败：', error)
           }
         }
       },

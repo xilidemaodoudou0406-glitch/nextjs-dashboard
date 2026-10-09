@@ -1,12 +1,7 @@
 import { sql } from '@/app/lib/db/client'
 import { embedText } from '@/app/lib/ai/embedding'
-import {
-  EMBEDDING_MODEL_ID,
-} from '@/app/lib/ai/provider'
-import {
-  extractKeywordTerms,
-  type RetrievalChannel,
-} from '@/app/lib/ai/retrieval'
+import { EMBEDDING_MODEL_ID } from '@/app/lib/ai/provider'
+import { type RetrievalChannel } from '@/app/lib/ai/retrieval'
 
 const MAX_TEXT_CHARACTERS_PER_MESSAGE = 6_000
 
@@ -16,7 +11,7 @@ export type ConversationMemory = {
   content: string
   similarity: number
   denseSimilarity: number | null
-  keywordSimilarity: number | null
+  bm25Score: number | null
   retrievalScore: number
   retrievalChannels: RetrievalChannel[]
   retrievalText: string
@@ -48,22 +43,22 @@ type DenseMemoryRow = BaseMemoryRow & {
   similarity: number
 }
 
-type KeywordMemoryRow = BaseMemoryRow & {
-  keyword_similarity: number
+type Bm25MemoryRow = BaseMemoryRow & {
+  bm25_score: number
 }
 
 function mapMemoryRow(
   row: BaseMemoryRow,
   scores: {
     denseSimilarity?: number | null
-    keywordSimilarity?: number | null
+    bm25Score?: number | null
   },
 ): ConversationMemory {
   const denseSimilarity = scores.denseSimilarity ?? null
-  const keywordSimilarity = scores.keywordSimilarity ?? null
+  const bm25Score = scores.bm25Score ?? null
   const similarity = Math.max(
     denseSimilarity ?? Number.NEGATIVE_INFINITY,
-    keywordSimilarity ?? Number.NEGATIVE_INFINITY,
+    bm25Score ?? Number.NEGATIVE_INFINITY,
     0,
   )
 
@@ -73,9 +68,9 @@ function mapMemoryRow(
     content: row.content,
     similarity,
     denseSimilarity,
-    keywordSimilarity,
+    bm25Score,
     retrievalScore: similarity,
-    retrievalChannels: denseSimilarity === null ? ['keyword'] : ['dense'],
+    retrievalChannels: denseSimilarity === null ? ['bm25'] : ['dense'],
     retrievalText: row.retrieval_text,
     memoryType: row.memory_type,
     memoryKey: row.memory_key,
@@ -141,7 +136,7 @@ export async function saveConversationMemory({
   if (!userText.trim() || !assistantText.trim()) return false
 
   // content 保存完整的一问一答，命中后可作为原始证据注入模型；
-  // retrievalText 则是经过抽取的短文本，只负责 Embedding 和关键词检索。
+  // retrievalText 则是经过抽取的短文本，只负责 Embedding 和 BM25 检索。
   const content = buildMemoryContent({ userText, assistantText })
   // 动态导入避免普通检索请求加载记忆抽取模型相关代码。
   const { extractConversationMemory } = await import('./memory-extractor')
@@ -156,6 +151,26 @@ export async function saveConversationMemory({
   const vector = serializeVector(embedding)
   const memoryId = crypto.randomUUID()
   const keywordsJson = JSON.stringify(extractedMemory.keywords)
+  let memoryKey: string | null = null
+
+  if (extractedMemory.shouldTrackChanges) {
+    try {
+      // Key 解析器会先读取当前对话族的语义化 Key 注册表：少量时全部
+      // 提供，数量较多时只召回 Top 10，再让模型复用、创建或放弃 Key。
+      const { resolveConversationMemoryKey } = await import('./memory-key')
+      memoryKey = await resolveConversationMemoryKey({
+        userId,
+        chatId,
+        sourceAssistantMessageId: assistantMessageId,
+        retrievalText: extractedMemory.retrievalText,
+        memoryEmbedding: embedding,
+      })
+    } catch (error) {
+      // Key 分类失败不能阻止长期记忆入库；此时保存为独立记忆，避免错误
+      // 复用一个 Key 后把无关的当前事实标记为失效。
+      console.error('解析长期记忆 memoryKey 失败，已保存为独立记忆：', error)
+    }
+  }
 
   const insertedRows = await sql<{ id: string }[]>`
     INSERT INTO conversation_memories (
@@ -182,7 +197,7 @@ export async function saveConversationMemory({
       ${content},
       ${extractedMemory.retrievalText},
       ${extractedMemory.memoryType},
-      ${extractedMemory.memoryKey},
+      ${memoryKey},
       ARRAY(
         SELECT jsonb_array_elements_text(${keywordsJson}::jsonb)
       ),
@@ -208,7 +223,7 @@ export async function saveConversationMemory({
     RETURNING id
   `
 
-  if (insertedRows.length === 1 && extractedMemory.memoryKey) {
+  if (insertedRows.length === 1 && memoryKey) {
     // 同一 chat 内的新事实替换旧事实。分支自己的新值不会修改父对话，
     // 因而不会影响主线或其他兄弟分支的历史语义。
     await sql`
@@ -218,7 +233,7 @@ export async function saveConversationMemory({
         superseded_by = ${memoryId}::uuid
       WHERE user_id = ${userId}
         AND chat_id = ${chatId}
-        AND memory_key = ${extractedMemory.memoryKey}
+        AND memory_key = ${memoryKey}
         AND id <> ${memoryId}::uuid
         AND invalidated_at IS NULL
     `
@@ -307,10 +322,11 @@ export async function searchConversationMemories({
 }
 
 /**
- * 关键词通道补足向量检索对错误码、版本号、函数名和专有名词不稳定的问题。
- * 检索范围与 dense retrieval 使用同一套用户、主对话和分支锚点约束。
+ * BM25 通道补足向量检索对错误码、版本号、函数名和专有名词不稳定的问题。
+ * 词项由数据库的 bm25_tokenize 统一生成；IDF、平均文档长度只基于当前用户
+ * 在当前主对话/分支时间线内可见的记忆计算，不让其他用户的数据影响排序。
  */
-export async function searchConversationMemoriesByKeyword({
+export async function searchConversationMemoriesByBm25({
   userId,
   chatId,
   query,
@@ -325,18 +341,18 @@ export async function searchConversationMemoriesByKeyword({
   if (!normalizedQuery) return []
 
   const safeLimit = Math.min(Math.max(Math.trunc(limit), 1), 50)
-  // 精确词主要是错误码、版本号、函数名等 ASCII 实体；JSON 参数化传入 SQL，
-  // 不把用户内容拼接进 SQL 字符串。
-  const keywordTermsJson = JSON.stringify(extractKeywordTerms(normalizedQuery))
-
-  const rows = await sql<KeywordMemoryRow[]>`
-    WITH current_chat AS (
+  const rows = await sql<Bm25MemoryRow[]>`
+    WITH query_terms AS (
+      SELECT DISTINCT term
+      FROM unnest(bm25_tokenize(${normalizedQuery})) AS term
+    ),
+    current_chat AS (
       SELECT id, parent_chat_id, branch_from_message_id
       FROM chats
       WHERE id = ${chatId}
         AND user_id = ${userId}
     ),
-    scoped_memories AS (
+    scoped_memories AS NOT MATERIALIZED (
       SELECT memory.*
       FROM conversation_memories AS memory
       INNER JOIN messages AS source_assistant
@@ -346,7 +362,6 @@ export async function searchConversationMemoriesByKeyword({
         ON anchor.id = current_chat.branch_from_message_id
         AND anchor.chat_id = current_chat.parent_chat_id
       WHERE memory.user_id = ${userId}
-        AND memory.embedding_model = ${EMBEDDING_MODEL_ID}
         AND memory.invalidated_at IS NULL
         AND (
           memory.chat_id = current_chat.id
@@ -358,47 +373,84 @@ export async function searchConversationMemoriesByKeyword({
           )
         )
     ),
-    keyword_scored AS (
+    corpus_stats AS (
       SELECT
-        memory.*,
-        -- pg_trgm 覆盖近似字符匹配，exact_matches 则专门奖励精确技术实体。
-        similarity(memory.retrieval_text, ${normalizedQuery}) AS trigram_similarity,
-        (
-          SELECT COUNT(*)::int
-          FROM jsonb_array_elements_text(${keywordTermsJson}::jsonb) AS term(value)
-          WHERE memory.retrieval_text ILIKE '%' || term.value || '%'
-        ) AS exact_matches
+        COUNT(*)::float8 AS document_count,
+        GREATEST(COALESCE(AVG(bm25_document_length), 1), 1)::float8
+          AS average_document_length
+      FROM scoped_memories
+    ),
+    document_frequencies AS (
+      SELECT
+        query_term.term,
+        COUNT(memory.id)::float8 AS document_frequency
+      FROM query_terms AS query_term
+      LEFT JOIN scoped_memories AS memory
+        ON memory.bm25_terms @> ARRAY[query_term.term]
+      GROUP BY query_term.term
+    ),
+    candidates AS (
+      SELECT memory.*
       FROM scoped_memories AS memory
+      WHERE memory.bm25_terms && ARRAY(
+        SELECT term
+        FROM query_terms
+      )
     )
     SELECT
-      id,
-      chat_id,
-      content,
-      retrieval_text,
-      memory_type,
-      memory_key,
-      importance,
-      source_user_message_id,
-      source_assistant_message_id,
-      LEAST(
-        1.0,
-        -- 最终分数上限为 1；精确实体优先，其次是字符相似度，importance
-        -- 只提供很小的加成，避免低相关但“重要”的记忆挤到前面。
-        trigram_similarity
-          + LEAST(exact_matches, 3) * 0.25
-          + importance * 0.05
-      )::float8 AS keyword_similarity
-    FROM keyword_scored
-    WHERE exact_matches > 0 OR trigram_similarity >= 0.12
+      candidate.id,
+      candidate.chat_id,
+      candidate.content,
+      candidate.retrieval_text,
+      candidate.memory_type,
+      candidate.memory_key,
+      candidate.importance,
+      candidate.source_user_message_id,
+      candidate.source_assistant_message_id,
+      score.bm25_score::float8
+    FROM candidates AS candidate
+    CROSS JOIN corpus_stats
+    CROSS JOIN LATERAL (
+      SELECT SUM(
+        -- Robertson/Sparck Jones IDF（带正值平滑）乘以 BM25 饱和词频。
+        ln(
+          1 + (
+            corpus_stats.document_count
+              - document_frequency.document_frequency
+              + 0.5
+          ) / (document_frequency.document_frequency + 0.5)
+        ) * (
+          term_frequency.frequency * (1.2 + 1)
+        ) / (
+          term_frequency.frequency
+            + 1.2 * (
+              1 - 0.75
+              + 0.75 * candidate.bm25_document_length
+                / corpus_stats.average_document_length
+            )
+        )
+      ) AS bm25_score
+      FROM (
+        SELECT
+          document_term.term,
+          COUNT(*)::float8 AS frequency
+        FROM unnest(candidate.bm25_terms) AS document_term(term)
+        INNER JOIN query_terms
+          ON query_terms.term = document_term.term
+        GROUP BY document_term.term
+      ) AS term_frequency
+      INNER JOIN document_frequencies AS document_frequency
+        ON document_frequency.term = term_frequency.term
+    ) AS score
+    WHERE score.bm25_score > 0
     ORDER BY
-      exact_matches DESC,
-      trigram_similarity DESC,
-      importance DESC,
-      id ASC
+      score.bm25_score DESC,
+      candidate.importance DESC,
+      candidate.id ASC
     LIMIT ${safeLimit}
   `
 
   return rows.map((row) =>
-    mapMemoryRow(row, { keywordSimilarity: row.keyword_similarity }),
+    mapMemoryRow(row, { bm25Score: row.bm25_score }),
   )
 }

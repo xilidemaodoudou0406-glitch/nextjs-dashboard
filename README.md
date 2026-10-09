@@ -41,7 +41,8 @@ A2 分支上下文：M1、A1、M2、A2、B1、BA1、B2
 - 主对话和分支都只从浏览器上传最新消息，历史上下文由服务端权威组装；
 - 使用“最近 16 条原文上限 + Token 预算 + 最多 3 条 RAG 记忆”控制模型输入长度；
 - 使用百炼 `text-embedding-v4` 和 PostgreSQL pgvector 保存、检索结构化长期记忆；
-- 对上下文依赖问题进行条件式查询改写，结合 pgvector 语义召回与基于 pg_trgm、精确技术词匹配的词法召回，并通过 RRF 融合候选；
+- 使用持久化语义 Key 注册表管理可变事实：优先复用当前时间线已有 Key，必要时创建规范化新 Key，并保持主对话与分支隔离；
+- 对上下文依赖问题进行条件式查询改写，结合 pgvector 语义召回与项目内实现的 BM25 词法召回，并通过 RRF 融合候选；
 - 图片先上传到 Vercel Blob，再以公网 HTTPS URL 与文字组成同一条消息；
 - 用户消息、AI SDK 消息和数据库记录共用同一个 UUID；
 - 区分浏览器请求状态与 `completed / interrupted` 消息持久化状态；
@@ -79,7 +80,10 @@ Token 预算内的最近原始消息（最多 16 条）
 正常完成的问答先经过长期记忆资格判断，寒暄和无信息量追问不会建立索引；
 有效记忆会被提取为自包含的检索文本，再生成 1024 维向量写入
 `conversation_memories`。检索同时执行 pgvector 语义召回和 PostgreSQL
-关键词召回，通过 RRF 融合后再按阈值、来源消息及 Token 预算筛选。
+BM25 词法召回，通过 RRF 融合后再按阈值、来源消息及 Token 预算筛选。
+BM25 不依赖额外搜索扩展：数据库函数统一切分中英文和技术标识符，生成列
+为历史及新增记忆保存词项和文档长度，查询时在当前可见时间线内计算词频、
+文档频率与平均文档长度。
 记忆索引仍是可重建的派生数据，完整记录以 `messages` 为准。当前每轮最多抽取一条记忆；具体边界见实现记录。
 
 ### 最小数据关系
@@ -100,7 +104,7 @@ chats.branch_from_message_id
 - Next.js 16、React 19、TypeScript
 - AI SDK 6、`@ai-sdk/react`
 - Auth.js 5
-- PostgreSQL、postgres.js、pgvector、pg_trgm
+- PostgreSQL、postgres.js、pgvector
 - 阿里云百炼 `text-embedding-v4`
 - Zod
 - Vercel Blob

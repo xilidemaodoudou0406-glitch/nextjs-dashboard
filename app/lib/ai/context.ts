@@ -1,7 +1,7 @@
 import type { ChatMessage, MessagePersistenceStatus } from './message'
 import {
   searchConversationMemories,
-  searchConversationMemoriesByKeyword,
+  searchConversationMemoriesByBm25,
   type ConversationMemory,
 } from './memory'
 import {
@@ -17,7 +17,6 @@ export const RECENT_MESSAGE_LIMIT = 16
 export const RETRIEVAL_CANDIDATE_LIMIT = 20
 export const RETRIEVAL_RESULT_LIMIT = 3
 export const MEMORY_SIMILARITY_THRESHOLD = 0.6
-export const KEYWORD_SIMILARITY_THRESHOLD = 0.12
 
 type MessageRow = {
   id: string
@@ -135,20 +134,19 @@ export function selectRelevantMemories({
     ),
   )
   const relevant = memories.filter((memory) => {
-    // 两条召回通道只要有一条达到各自阈值即可保留；关键词候选不应被
-    // dense 阈值误删，反之亦然。
+    // 两条召回通道只要有一条有效即可保留；BM25 候选不应被 dense
+    // 相似度阈值误删，反之亦然。
     const passesDenseThreshold =
       memory.denseSimilarity !== null &&
       memory.denseSimilarity >= MEMORY_SIMILARITY_THRESHOLD
-    const passesKeywordThreshold =
-      memory.keywordSimilarity !== null &&
-      memory.keywordSimilarity >= KEYWORD_SIMILARITY_THRESHOLD
+    const hasPositiveBm25Score =
+      memory.bm25Score !== null && memory.bm25Score > 0
     const duplicatesRecentMessage =
       recentMessageIds.has(memory.sourceUserMessageId) ||
       recentMessageIds.has(memory.sourceAssistantMessageId)
 
     if (
-      (!passesDenseThreshold && !passesKeywordThreshold) ||
+      (!passesDenseThreshold && !hasPositiveBm25Score) ||
       duplicatesRecentMessage
     ) {
       return false
@@ -179,7 +177,7 @@ export function selectRelevantMemories({
  * 组装一次模型调用需要的全部上下文：
  * 1. 从数据库读取可信的最近消息；
  * 2. 必要时把指代问题改写为独立检索查询；
- * 3. 并行执行向量与关键词召回；
+ * 3. 并行执行向量与 BM25 召回；
  * 4. RRF 融合、去重并按 Token 预算选择最终记忆；
  * 5. 返回不含敏感正文的 Trace，供本地调试和离线评估。
  */
@@ -202,7 +200,7 @@ export async function buildModelContext({
     recentMessages: 0,
     rewrite: 0,
     dense: 0,
-    keyword: 0,
+    bm25: 0,
     total: 0,
   }
 
@@ -215,7 +213,7 @@ export async function buildModelContext({
     }
   }
 
-  // 每条增强通道独立降级：向量服务失败时关键词仍可工作，关键词 SQL
+  // 每条增强通道独立降级：向量服务失败时 BM25 仍可工作，BM25 SQL
   // 失败时向量仍可工作；两者都失败也不影响最近原文回答。
   const retrieveDense = async (query: string) => {
     const started = performance.now()
@@ -235,21 +233,21 @@ export async function buildModelContext({
     }
   }
 
-  const retrieveKeyword = async (query: string) => {
+  const retrieveBm25 = async (query: string) => {
     const started = performance.now()
     try {
-      return await searchConversationMemoriesByKeyword({
+      return await searchConversationMemoriesByBm25({
         userId,
         chatId,
         query,
         limit: RETRIEVAL_CANDIDATE_LIMIT,
       })
     } catch (error) {
-      fallbackReasons.push('keyword_retrieval_failed')
-      console.error('关键词检索失败，已降级为其他上下文：', error)
+      fallbackReasons.push('bm25_retrieval_failed')
+      console.error('BM25 检索失败，已降级为其他上下文：', error)
       return []
     } finally {
-      latency.keyword = performance.now() - started
+      latency.bm25 = performance.now() - started
     }
   }
 
@@ -257,7 +255,7 @@ export async function buildModelContext({
   let wasRewritten = false
   let recentMessages: ChatMessage[]
   let denseMemories: ConversationMemory[]
-  let keywordMemories: ConversationMemory[]
+  let bm25Memories: ConversationMemory[]
 
   if (shouldRewriteRetrievalQuery(retrievalQuery)) {
     // 改写器需要最近消息来消解“它/这个”等指代，因此这一分支必须先查历史，
@@ -280,17 +278,17 @@ export async function buildModelContext({
       latency.rewrite = performance.now() - rewriteStarted
     }
 
-    ;[denseMemories, keywordMemories] = await Promise.all([
+    ;[denseMemories, bm25Memories] = await Promise.all([
       retrieveDense(retrievalQuery),
-      retrieveKeyword(retrievalQuery),
+      retrieveBm25(retrievalQuery),
     ])
   } else {
-    // 独立问题不需要查询改写，数据库历史、远程 Embedding 和关键词 SQL
+    // 独立问题不需要查询改写，数据库历史、远程 Embedding 和 BM25 SQL
     // 彼此没有依赖，直接并行可减少整体等待时间。
-    ;[recentMessages, denseMemories, keywordMemories] = await Promise.all([
+    ;[recentMessages, denseMemories, bm25Memories] = await Promise.all([
       loadRecentMessages(),
       retrieveDense(retrievalQuery),
-      retrieveKeyword(retrievalQuery),
+      retrieveBm25(retrievalQuery),
     ])
   }
 
@@ -300,7 +298,7 @@ export async function buildModelContext({
 
   const fusedMemories = fuseConversationMemoryResults({
     dense: denseMemories,
-    keyword: keywordMemories,
+    bm25: bm25Memories,
   })
 
   const relevantMemories = selectRelevantMemories({
@@ -320,9 +318,9 @@ export async function buildModelContext({
       id: memory.id,
       score: memory.denseSimilarity ?? 0,
     })),
-    keywordCandidates: keywordMemories.map((memory) => ({
+    bm25Candidates: bm25Memories.map((memory) => ({
       id: memory.id,
-      score: memory.keywordSimilarity ?? 0,
+      score: memory.bm25Score ?? 0,
     })),
     selectedMemoryIds: relevantMemories.map(({ id }) => id),
     fallbackReasons,

@@ -4,7 +4,6 @@ import type { ChatMessage } from './message'
 import type { ConversationMemory } from './memory'
 import {
   estimateTextTokens,
-  extractKeywordTerms,
   fuseConversationMemoryResults,
   selectRecentMessagesWithinBudget,
   shouldRewriteRetrievalQuery,
@@ -28,7 +27,7 @@ function memory(
     content: `记忆 ${id}`,
     similarity: 0.8,
     denseSimilarity: 0.8,
-    keywordSimilarity: null,
+    bm25Score: null,
     retrievalScore: 0.8,
     retrievalChannels: ['dense'],
     retrievalText: `检索文本 ${id}`,
@@ -50,33 +49,27 @@ describe('RAG retrieval helpers', () => {
     ).toBe(false)
   })
 
-  it('extracts exact technical terms for the keyword channel', () => {
-    expect(
-      extractKeywordTerms('React 19 中报错 23505，useChat.status 是什么？'),
-    ).toEqual(['react', '19', '23505', 'usechat.status'])
-  })
-
   it('gives candidates found by both channels a higher RRF score', () => {
     const both = memory('both')
     const denseOnly = memory('dense-only')
-    const keywordBoth = memory('both', {
+    const bm25Both = memory('both', {
       denseSimilarity: null,
-      keywordSimilarity: 0.9,
-      retrievalChannels: ['keyword'],
+      bm25Score: 3.9,
+      retrievalChannels: ['bm25'],
     })
-    const keywordOnly = memory('keyword-only', {
+    const bm25Only = memory('bm25-only', {
       denseSimilarity: null,
-      keywordSimilarity: 0.85,
-      retrievalChannels: ['keyword'],
+      bm25Score: 2.85,
+      retrievalChannels: ['bm25'],
     })
 
     const fused = fuseConversationMemoryResults({
       dense: [denseOnly, both],
-      keyword: [keywordBoth, keywordOnly],
+      bm25: [bm25Both, bm25Only],
     })
 
     expect(fused[0].id).toBe('both')
-    expect(fused[0].retrievalChannels).toEqual(['dense', 'keyword'])
+    expect(fused[0].retrievalChannels).toEqual(['dense', 'bm25'])
   })
 
   it('keeps the latest message even when it exceeds the token budget', () => {
